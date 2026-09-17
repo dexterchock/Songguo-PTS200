@@ -17,12 +17,11 @@
 
 ## Fixes & Improvements in This Fork
 
-### 1. 20V Power Limit & Brownout Reset (BOR) Fix
+### 1. Power Limit Consistency & Duty Cycle Leak Fix
 
-* **Fixed 20V Duty Cycle Spikes:** In official firmware, selecting 20V 50% power mode (`POWER_LIMIT_20_2`) only applied the limit inside `Thermostat()`. Functions like `SENSORCheck()`, `SLEEPCheck()`, `setup()`, and `heatWithLimit()` improperly fell back to 100% duty cycle (`POWER_LIMIT_20`).
+* **Fixed Power Limit Bypasses:** In official firmware, selecting reduced power modes like `POWER_LIMIT_20_2` only applied the limit inside `Thermostat()`. Auxiliary functions like `SENSORCheck()`, `SLEEPCheck()`, `setup()`, and `heatWithLimit()` improperly fell back to 100% duty cycle (`POWER_LIMIT_20`).
 
-
-* **Eliminated Reboot Loop:** Because temperature sensing cycles run continuously in the main loop, the iron repeatedly blasted 100% power spikes every few milliseconds. This triggered charger Over-Current Protection (OCP) or input voltage sags, brown-outing the ESP32-S2 and forcing a restart. All control paths now properly respect `POWER_LIMIT_20_2`.
+* **Unified Power Limit Enforcement:** Because sensor polling and state checks run continuously in the main loop, the iron previously delivered unintended 100% power spikes outside the main thermostat control loop. All control paths and heating functions now consistently respect configured power caps.
 
 
 
