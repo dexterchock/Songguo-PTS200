@@ -30,6 +30,7 @@ QC3Control QC(14, 13);
 
 #include <PID_v1.h>
 #include <EEPROM.h>
+#include <math.h>
 
 #include "SparkFun_LIS2DH12.h"  // http://librarymanager/All#SparkFun_LIS2DH12
 SPARKFUN_LIS2DH12 accel;  // Create instance
@@ -156,7 +157,6 @@ void setup() {
     while (true) { delay(1000); }
   }
 
-  // FIX: Trapped return status on manual factory reset button combination
   if (digitalRead(BUTTON_P_PIN) == LOW && digitalRead(BUTTON_N_PIN) == LOW &&
       digitalRead(BUTTON_PIN) == HIGH) {
     if (!write_default_EEPROM()) {
@@ -204,14 +204,10 @@ void setup() {
   Vin = getVIN();
 
   SetTemp = DefaultTemp;
-  RawTemp = denoiseAnalog(SENSOR_PIN);
+  RawTemp = denoiseAnalog();
 
   calculateTemp();
   ShowTemp = CurrentTemp;
-
-  limit = getPowerLimit();
-  if (((CurrentTemp + 20) < DefaultTemp) && !inLockMode)
-    ledcWrite(CONTROL_CHANNEL, constrain(HEATER_ON, 0, limit));
 
   ctrl.SetOutputLimits(0, 255);
   ctrl.SetMode(AUTOMATIC);
@@ -321,7 +317,6 @@ void SLEEPCheck() {
     if (handleMoved) {
       u8g2.setPowerSave(0);
       if (inSleepMode) {
-        // FIX: Removed direct ledcWrite() heating command; Thermostat() handles power safely
         beep();
         beepIfWorky = true;
       }
@@ -380,29 +375,28 @@ void SENSORCheck() {
     }
   }
 
+  // Force heater off unconditionally while measuring 
   ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
+  
   if (VoltageValue == 3) {
     delayMicroseconds(TIME2SETTLE_20V);
   } else {
     delayMicroseconds(TIME2SETTLE);
   }
 
-  double temp = denoiseAnalog(SENSOR_PIN);
+  double temp = denoiseAnalog();
 
   if (SensorCounter++ > 10) {
     Vin = getVIN();
     SensorCounter = 0;
   }
 
-  RawTemp += (temp - RawTemp) * SMOOTHIE;
-  calculateTemp();
-
-  // FIX: Standardized strict boundary condition check (< 500.0)
-  if (!inLockMode && !inOffMode && !inSleepMode && CurrentTemp < 500.0) {
-    limit = getPowerLimit();
-    ledcWrite(CONTROL_CHANNEL, constrain(HEATER_PWM, 0, limit));
+  if (temp >= 950.0) {
+    RawTemp = temp;
+    CurrentTemp = 999.0;
   } else {
-    ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
+    RawTemp += (temp - RawTemp) * SMOOTHIE;
+    calculateTemp();
   }
 
   if ((ShowTemp != Setpoint) || (abs(ShowTemp - CurrentTemp) > 5))
@@ -423,9 +417,9 @@ void SENSORCheck() {
     beep();
     TipIsPresent = true;
     ChangeTipScreen();
-    updateEEPROM();
+    update_EEPROM();
     handleMoved = true;
-    RawTemp = denoiseAnalog(SENSOR_PIN);
+    RawTemp = denoiseAnalog();
     c0 = LOW;
     setRotary(TEMP_MIN, TEMP_MAX, TEMP_STEP, SetTemp);
   }
@@ -452,8 +446,7 @@ void calculateTemp() {
 }
 
 void Thermostat() {
-  // FIX: Standardized strict boundary condition check (>= 500.0)
-  if (CurrentTemp >= 500.0) {
+  if (!isfinite(CurrentTemp) || CurrentTemp >= 500.0) {
     Setpoint = 0;
     Output = 0;
     ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
@@ -515,9 +508,9 @@ int getRotary() {
   return (count >> ROTARY_TYPE);
 }
 
-void getEEPROM() { read_EEPROM(); }
+bool getEEPROM() { return read_EEPROM(); }
 
-void updateEEPROM() { update_EEPROM(); }
+bool updateEEPROM() { return update_EEPROM(); }
 
 void MainScreen() {
   u8g2.firstPage();
@@ -597,6 +590,7 @@ void SetupScreen() {
   uint16_t SaveSetTemp = SetTemp;
   uint8_t selection = 0;
   bool repeat = true;
+  bool eepromOperationFailed = false;
 
   while (repeat) {
     selection = MenuScreen(SetupItems, sizeof(SetupItems), selection);
@@ -633,9 +627,17 @@ void SetupScreen() {
                                             restore_default_config);
         if (restore_default_config) {
           restore_default_config = false;
-          // FIX: Checked return values for menu config restoration
-          if (!write_default_EEPROM() || !read_EEPROM()) {
-            Serial.println("Failed to restore default EEPROM");
+          if (!write_default_EEPROM()) {
+            Serial.println("Failed to write default EEPROM");
+            eepromOperationFailed = true;
+            repeat = false;
+            break;
+          }
+          if (!read_EEPROM()) {
+            Serial.println("Failed to read restored default EEPROM");
+            eepromOperationFailed = true;
+            repeat = false;
+            break;
           }
         }
       } break;
@@ -676,7 +678,13 @@ void SetupScreen() {
         break;
     }
   }
-  updateEEPROM();
+
+  if (!eepromOperationFailed) {
+    if (!update_EEPROM()) {
+      Serial.println("EEPROM update failed at setup exit");
+    }
+  }
+
   handleMoved = true;
   SetTemp = SaveSetTemp;
   setRotary(TEMP_MIN, TEMP_MAX, TEMP_STEP, SetTemp);
@@ -949,6 +957,14 @@ void ChangeTipScreen() {
 }
 
 void CalibrationScreen() {
+  bool savedLockMode = inLockMode;
+  bool savedSleepMode = inSleepMode;
+  bool savedOffMode = inOffMode;
+  bool savedBoostMode = inBoostMode;
+  bool savedHandleMoved = handleMoved;
+  uint32_t savedSleepMillis = sleepmillis;
+  uint32_t savedBoostMillis = boostmillis;
+
   inLockMode = false;
   inSleepMode = false;
   inOffMode = false;
@@ -967,6 +983,20 @@ void CalibrationScreen() {
     do {
       SENSORCheck();
       Thermostat();
+
+      // Immediately abort calibration if the sensor detects an open circuit/fault
+      if (!isfinite(CurrentTemp) || CurrentTemp >= 500.0) {
+        ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
+        inLockMode = savedLockMode;
+        inSleepMode = savedSleepMode;
+        inOffMode = savedOffMode;
+        inBoostMode = savedBoostMode;
+        handleMoved = savedHandleMoved;
+        sleepmillis = savedSleepMillis;
+        boostmillis = savedBoostMillis;
+        u8g2.setPowerSave(inOffMode ? 1 : 0);
+        return;
+      }
 
       u8g2.firstPage();
       do {
@@ -1020,6 +1050,17 @@ void CalibrationScreen() {
   }
 
   SetTemp = tempSetTemp;
+
+  inLockMode = savedLockMode;
+  inSleepMode = savedSleepMode;
+  inOffMode = savedOffMode;
+  inBoostMode = savedBoostMode;
+  handleMoved = savedHandleMoved;
+  sleepmillis = savedSleepMillis;
+  boostmillis = savedBoostMillis;
+
+  u8g2.setPowerSave(inOffMode ? 1 : 0);
+
   update_EEPROM();
 }
 
@@ -1096,7 +1137,7 @@ void AddTipScreen() {
     MessageScreen(MaxTipMessage, sizeof(MaxTipMessage));
 }
 
-uint16_t denoiseAnalog(byte port) {
+uint16_t denoiseAnalog() {
   uint32_t result = 0;
   int resultArray[8];
 
@@ -1129,21 +1170,23 @@ uint16_t denoiseAnalog(byte port) {
 double getChipTemp() {
 #if defined(MPU)
   mpu6050.update();
-  int16_t Temp = mpu6050.getTemp();
+  return mpu6050.getTemp();
 #elif defined(LIS)
-  int16_t Temp = accel.getTemperature();
+  return accel.getTemperature();
+#else
+  #error "No temperature/IMU sensor type defined: define LIS or MPU"
 #endif
-  return Temp;
 }
 
 float getMPUTemp() {
 #if defined(MPU)
   mpu6050.update();
-  int16_t Temp = mpu6050.getTemp();
+  return mpu6050.getTemp();
 #elif defined(LIS)
-  int16_t Temp = accel.getTemperature();
+  return accel.getTemperature();
+#else
+  #error "No temperature/IMU sensor type defined: define LIS or MPU"
 #endif
-  return Temp;
 }
 
 uint16_t getVIN() {
@@ -1160,15 +1203,6 @@ uint16_t getVIN() {
   voltage = value * 31.3;
 
   return voltage;
-}
-
-int32_t variance(int16_t a[]) {
-  int32_t sum = 0;
-  for (int i = 0; i < 32; i++) sum += a[i];
-  int16_t mean = (int32_t)sum / 32;
-  int32_t sqDiff = 0;
-  for (int i = 0; i < 32; i++) sqDiff += (a[i] - mean) * (a[i] - mean);
-  return (int32_t)sqDiff / 32;
 }
 
 unsigned int Button_Time1 = 0, Button_Time2 = 0;
@@ -1333,4 +1367,9 @@ static void usbEventCallback(void *arg, esp_event_base_t event_base,
   }
 }
 
-void turnOffHeater(Button2 &b) { inOffMode = true; }
+void turnOffHeater(Button2 &b) { 
+  inOffMode = true; 
+  Output = 0;
+  Setpoint = 0;
+  ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
+}
