@@ -163,8 +163,11 @@ bool read_EEPROM()
 
   if (EEPROM.readUInt(ADDR_SYSTEM_INIT_FLAG) != VERSION_NUM)
   {
-    Serial.println("System didn't initialised");
-    write_default_EEPROM();
+    Serial.println("System didn't initialise");
+    if (!write_default_EEPROM()) {
+      Serial.println("Failed to write default EEPROM");
+      return false;
+    }
   }
 
   DefaultTemp = EEPROM.readUShort(ADDR_DEFAULT_TEMP);
@@ -181,10 +184,12 @@ bool read_EEPROM()
   WAKEUPthreshold = EEPROM.readUChar(ADDR_WAKEUP_THRESHOLD);
   CurrentTip = EEPROM.readUChar(ADDR_CURRENT_TIP);
   NumberOfTips = EEPROM.readUChar(ADDR_NUMBER_OF_TIPS);
+  language = EEPROM.readUChar(ADDR_LANGUAGE);
+  hand_side = EEPROM.readUChar(ADDR_HAND_SIDE);
 
   bool dirty = false;
 
-  // FIX: Comprehensive EEPROM bounds validation and auto-repair trigger
+  // EEPROM bounds validation
   if (NumberOfTips == 0 || NumberOfTips > TIPMAX) { NumberOfTips = 1; dirty = true; }
   if (CurrentTip >= NumberOfTips) { CurrentTip = 0; dirty = true; }
   if (VoltageValue > 4) { VoltageValue = VOLTAGE_VALUE; dirty = true; }
@@ -201,12 +206,12 @@ bool read_EEPROM()
     }
   }
 
-  language = EEPROM.readUChar(ADDR_LANGUAGE);
-  hand_side = EEPROM.readUChar(ADDR_HAND_SIDE);
-
-  // Auto-repair EEPROM if corrupted values were detected and sanitized
+  // Auto-repair EEPROM if corrupted values were detected
   if (dirty) {
-    update_EEPROM();
+    if (!update_EEPROM()) {
+      Serial.println("EEPROM auto-repair failed");
+      return false;
+    }
   }
 
   return true;
