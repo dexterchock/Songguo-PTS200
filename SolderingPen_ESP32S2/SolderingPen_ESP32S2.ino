@@ -161,18 +161,43 @@ void setup() {
   digitalWrite(PD_CFG_1, HIGH);
   digitalWrite(PD_CFG_2, LOW);
 
+  // pinMode(14, INPUT);
+  // pinMode(13, INPUT);
+  // QC.set12V();
   Serial.begin(115200);
   Serial.setTxTimeoutMs(0);
+  // delay(5000);
 
+  //  analogSetAttenuation(ADC_11db);
+  //  vref_adc0 = calibrate_adc(ADC_UNIT_1, (adc_atten_t)ADC1_CHANNEL_5);
+  //  vref_adc1 = calibrate_adc(ADC_UNIT_2, (adc_atten_t)ADC2_CHANNEL_9);
   adc_sensor.attach(SENSOR_PIN);
   adc_vin.attach(VIN_PIN);
 
+  /*#if defined(MPU)
+    mpu6050.begin();
+    mpu6050.calcGyroOffsets(true);*/
+
+  // #endif
+
+  // set the pin modes 设置引脚模式
   pinMode(SENSOR_PIN, INPUT_PULLUP);
+  // pinMode(VIN_PIN, INPUT);
   pinMode(BUZZER_PIN, OUTPUT);
+  // pinMode(CONTROL_PIN, OUTPUT);
   pinMode(BUTTON_P_PIN, INPUT_PULLUP);
   pinMode(BUTTON_N_PIN, INPUT_PULLUP);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
 
+  // digitalWrite(BUZZER_PIN, LOW);        // must be LOW when buzzer not in
+  // use当蜂鸣器不使用时，必须是低电平
+
+  // get default values from EEPROM 从EEPROM获取默认值
+  //  if (!EEPROM.begin(EEPROM_SIZE))
+  //  {
+  //    Serial.println("failed to initialise EEPROM");
+  //    delay(100);
+  //  }
   init_EEPROM();
   if (digitalRead(BUTTON_P_PIN) == LOW && digitalRead(BUTTON_N_PIN) == LOW &&
       digitalRead(BUTTON_PIN) == HIGH) {
@@ -210,15 +235,19 @@ void setup() {
 
   PD_Update();
 
+  // read supply voltages in mV 以mV为单位读取电源电压
   delay(100);
   Vin = getVIN();
 
+  // read and set current iron temperature 读取和设置当前的烙铁头温度
   SetTemp = DefaultTemp;
   RawTemp = denoiseAnalog(SENSOR_PIN);
 
   calculateTemp();
-  ShowTemp = CurrentTemp; // FIX: Show real measured temperature immediately at startup
+  ShowTemp = CurrentTemp;  // Dexter: show the measured tip temperature immediately after startup
 
+  // turn on heater if iron temperature is well below setpoint
+  // 如果烙铁头温度远低于设定值，则打开加热器
   limit = POWER_LIMIT_20;
   if (VoltageValue < 3) {
     limit = POWER_LIMIT_15;
@@ -226,25 +255,38 @@ void setup() {
   if (((CurrentTemp + 20) < DefaultTemp) && !inLockMode)
     ledcWrite(CONTROL_CHANNEL, constrain(HEATER_ON, 0, limit));
 
+  // set PID output range and start the PID
+  // 设置PID输出范围，启动PID
   ctrl.SetOutputLimits(0, 255);
   ctrl.SetMode(AUTOMATIC);
 
+  // set initial rotary encoder values 设置旋转编码器的初始值
+  // a0 = PINB & 1; b0 = PIND >> 7 & 1; ab0 = (a0 == b0);
   a0 = 0;
   b0 = 0;
   setRotary(TEMP_MIN, TEMP_MAX, TEMP_STEP, DefaultTemp);
 
+  // reset sleep timer 睡眠定时器重置
   sleepmillis = millis();
 
+  // long beep for setup completion 安装完成时长哔哔声
   beep();
   beep();
+  //  delay(2000);
   Serial.println("Soldering Pen");
-
+  // #elif defined(LIS)
+  //   u8g2.setBusClock(100000);
   Wire.begin();
-  Wire.setClock(100000);
+  Wire.setClock(100000);  // 400000
   if (accel.begin() == false) {
     delay(500);
     Serial.println("Accelerometer not detected.");
   }
+  // lis2dh12_block_data_update_set(&(accel.dev_ctx), PROPERTY_DISABLE);
+  // accel.setScale(LIS2DH12_2g);
+  // accel.setMode(LIS2DH12_HR_12bit);
+  // accel.setDataRate(LIS2DH12_ODR_400Hz);
+  // lis2dh12_fifo_mode_set(&(accel.dev_ctx), LIS2DH12_BYPASS_MODE);
 
   ChipTemp = getChipTemp();
   lastSENSORTmp = getMPUTemp();
@@ -257,6 +299,11 @@ void setup() {
   }else{
     u8g2.setDisplayRotation(U8G2_R1);
   }
+
+
+  // btn.begin(BUTTON_PIN);
+  // btn.setDoubleClickHandler(turnOffHeater);
+  // btn.setDebounceTime(25);
 }
 
 int SENSORCheckTimes = 0;
@@ -264,22 +311,32 @@ long lastMillis = 0;
 
 void loop() {
   long timems = millis();
-  ROTARYCheck();
-  SLEEPCheck();
+  ROTARYCheck();  // check rotary encoder (temp/boost setting, enter setup menu)
+                  // 检查旋转编码器(温度/升压设置，进入设置菜单)
+  SLEEPCheck();  // check and activate/deactivate sleep modes
+                 // 检查和激活/关闭睡眠模式
 
   if (SENSORCheckTimes > 1) {
-    SENSORCheck();
+    // long timems = millis();
+    SENSORCheck();  // reads temperature and vibration switch of the iron
+                    // 读取烙铁头的温度和振动开关
+    // lastMillis = millis() - timems;
+    // Serial.println(lastMillis);
     SENSORCheckTimes = 0;
   }
   SENSORCheckTimes++;
 
-  Thermostat();
-  MainScreen();
+  Thermostat();  // heater control 加热器控制
+  MainScreen();  // updates the main page on the OLED 刷新OLED主界面
   lastMillis = millis() - timems;
   Serial.println(lastMillis);
 }
 
+// check rotary encoder; set temperature, toggle boost mode, enter setup menu
+// accordingly 检查旋转编码器;设置温度，切换升压模式，进入设置菜单相应
 void ROTARYCheck() {
+  // set working temperature according to rotary encoder value
+  // 根据旋转编码器值设定工作温度
   SetTemp = getRotary();
 
   uint8_t c = digitalRead(BUTTON_PIN);
@@ -301,7 +358,7 @@ void ROTARYCheck() {
           buttonmillis = millis();
           while ((digitalRead(BUTTON_PIN)) && ((millis() - buttonmillis) < 200))
             delay(10);
-          if ((millis() - buttonmillis) >= 200) {
+          if ((millis() - buttonmillis) >= 200) {  // single click
             if (inOffMode) {
               inOffMode = false;
             } else {
@@ -311,7 +368,7 @@ void ROTARYCheck() {
               }
               handleMoved = true;
             }
-          } else {
+          } else {  // double click
             inOffMode = true;
           }
         }
@@ -320,42 +377,53 @@ void ROTARYCheck() {
   }
   c0 = c;
 
+  // check timer when in boost mode 在升温模式时检查计时器
   if (inBoostMode && timeOfBoost) {
     goneSeconds = (millis() - boostmillis) / 1000;
     if (goneSeconds >= timeOfBoost) {
-      inBoostMode = false;
-      beep();
-      beepIfWorky = true;
+      inBoostMode = false;  // stop boost mode 停止升温模式
+      beep();  // beep if boost mode is over 如果升温模式结束，会发出蜂鸣声
+      beepIfWorky = true;  // beep again when working temperature is reached
+                           // 当达到工作温度，会发出蜂鸣声
     }
   }
 }
 
+// check and activate/deactivate sleep modes 检查和激活/关闭睡眠模式
 void SLEEPCheck() {
   if (inLockMode) {
     ;
   } else {
-    if (handleMoved) {
+    if (handleMoved) {  // if handle was moved 如果手柄被移动
       u8g2.setPowerSave(0);
-      if (inSleepMode) {
+      if (inSleepMode) {  // in sleep or off mode? 在睡眠模式还是关机模式?
         limit = POWER_LIMIT_20;
         if (VoltageValue < 3) {
           limit = POWER_LIMIT_15;
         }
-        if ((CurrentTemp + 20) < SetTemp)
-          ledcWrite(CONTROL_CHANNEL, constrain(HEATER_ON, 0, limit));
-        beep();
-        beepIfWorky = true;
+        if ((CurrentTemp + 20) <
+            SetTemp)  // if temp is well below setpoint 如果温度远低于设定值
+          ledcWrite(
+              CONTROL_CHANNEL,
+              constrain(HEATER_ON, 0, limit));  // then start the heater right
+                                                // now 那现在就启动加热器
+        beep();              // beep on wake-up
+        beepIfWorky = true;  // beep again when working temperature is reached
+                             // 当达到工作温度，会发出蜂鸣声
       }
-      handleMoved = false;
-      inSleepMode = false;
-      sleepmillis = millis();
+      handleMoved = false;  // reset handleMoved flag
+      inSleepMode = false;  // reset sleep flag
+      //      inOffMode = false;      // reset off flag
+      sleepmillis = millis();  // reset sleep timer
     }
 
+    // check time passed since the handle was moved 检查把手被移动后经过的时间
     goneSeconds = (millis() - sleepmillis) / 1000;
     if ((!inSleepMode) && (time2sleep > 0) && (goneSeconds >= time2sleep)) {
       inSleepMode = true;
       beep();
-    } else if ((!inOffMode) && (time2off > 0) && ((goneSeconds / 60) >= time2off)) {
+    } else if ((!inOffMode) && (time2off > 0) &&
+               ((goneSeconds / 60) >= time2off)) {
       inOffMode = true;
       u8g2.setPowerSave(1);
       beep();
@@ -363,15 +431,52 @@ void SLEEPCheck() {
   }
 }
 
+// reads temperature, vibration switch and supply voltages
+// 读取温度，振动开关和电源电压
 void SENSORCheck() {
+  /*#if defined(MPU)
+    mpu6050.update();
+    if (abs(mpu6050.getGyroX() - gx) > WAKEUP_THRESHOLD ||
+    abs(mpu6050.getGyroY() - gy) > WAKEUP_THRESHOLD || abs(mpu6050.getGyroZ() -
+    gz) > WAKEUP_THRESHOLD)
+    {
+      gx = mpu6050.getGyroX();
+      gy = mpu6050.getGyroY();
+      gz = mpu6050.getGyroZ();
+      handleMoved = true;
+      Serial.println("进入工作状态!");
+    }*/
+  // #if defined(LIS)
+
+  // if (abs(accel.getX() - gx) > WAKEUPthreshold ||
+  //     abs(accel.getY() - gy) > WAKEUPthreshold ||
+  //     abs(accel.getZ() - gz) > WAKEUPthreshold) {
+  //   gx = accel.getX();
+  //   gy = accel.getY();
+  //   gz = accel.getZ();
+  //   handleMoved = true;
+  //   //    Serial.println("进入工作状态!");
+  // }
+
+  // accel.getRawX() return int16_t
+
   if (accel.available()) {
     accels[accelIndex][0] = accel.getRawX() + 32768;
     accels[accelIndex][1] = accel.getRawY() + 32768;
     accels[accelIndex][2] = accel.getRawZ() + 32768;
     accelIndex++;
 
+    // debug output
+    // Serial.print("X: ");
+    // Serial.print(accels[accelIndex][0]);
+    // Serial.print(" Y: ");
+    // Serial.print(accels[accelIndex][1]);
+    // Serial.print(" Z: ");
+    // Serial.println(accels[accelIndex][2]);
+
     if (accelIndex >= ACCEL_SAMPLES) {
       accelIndex = 0;
+      // cal variance
       uint64_t avg[3] = {0, 0, 0};
       for (int i = 0; i < ACCEL_SAMPLES; i++) {
         avg[0] += accels[i][0];
@@ -390,27 +495,41 @@ void SENSORCheck() {
       var[0] /= ACCEL_SAMPLES;
       var[1] /= ACCEL_SAMPLES;
       var[2] /= ACCEL_SAMPLES;
+      // debug output
+      // Serial.print("variance: ");
+      // Serial.print(var[0]);
+      // Serial.print(" ");
+      // Serial.print(var[1]);
+      // Serial.print(" ");
+      // Serial.println(var[2]);
 
       int varThreshold = WAKEUPthreshold * 10000;
 
-      if (var[0] > varThreshold || var[1] > varThreshold || var[2] > varThreshold) {
+      if (var[0] > varThreshold || var[1] > varThreshold ||
+          var[2] > varThreshold) {
         handleMoved = true;
+        //      Serial.println("进入工作状态!");
       }
     }
   }
 
-  ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
+  // #endif
+
+  ledcWrite(CONTROL_CHANNEL,
+            HEATER_OFF);  // shut off heater in order to measure
+                          // temperature 关闭加热器以测量温度
   if (VoltageValue == 3) {
     delayMicroseconds(TIME2SETTLE_20V);
   } else {
-    delayMicroseconds(TIME2SETTLE);
+    delayMicroseconds(TIME2SETTLE);  // wait for voltage to settle 等待电压稳定
   }
   long timems = millis();
-  double temp = denoiseAnalog(SENSOR_PIN);
+  double temp = denoiseAnalog(SENSOR_PIN);  // 读取ADC值的温度
   lastMillis = millis() - timems;
+  // Serial.println(lastMillis);
 
   if (SensorCounter++ > 10) {
-    Vin = getVIN();
+    Vin = getVIN();  // get Vin every now and then 时不时去获取VIN电压
     SensorCounter = 0;
   }
 
@@ -419,17 +538,24 @@ void SENSORCheck() {
     if (VoltageValue < 3) {
       limit = POWER_LIMIT_15;
     }
-    ledcWrite(CONTROL_CHANNEL, constrain(HEATER_PWM, 0, limit));
+    ledcWrite(CONTROL_CHANNEL,
+              constrain(HEATER_PWM, 0,
+                        limit));  // turn on again heater 再次打开加热器
   }
 
-  RawTemp += (temp - RawTemp) * SMOOTHIE;
-  calculateTemp();
+  RawTemp += (temp - RawTemp) *
+             SMOOTHIE;  // stabilize ADC temperature reading 稳定ADC温度读数
+  calculateTemp();  // calculate real temperature value 计算实际温度值
 
+  // stabilize displayed temperature when around setpoint
+  // 稳定显示温度时，周围的设定值
   if ((ShowTemp != Setpoint) || (abs(ShowTemp - CurrentTemp) > 5))
     ShowTemp = CurrentTemp;
   if (abs(ShowTemp - Setpoint) <= 1) ShowTemp = Setpoint;
-  // FIX #19: Removed 'if (inLockMode) { ShowTemp = 0; }' so real temp continues to display
 
+  // set state variable if temperature is in working range; beep if working
+  // temperature was just reached
+  // 温度在工作范围内可设置状态变量;当工作温度刚刚达到时，会发出蜂鸣声
   gap = abs(SetTemp - CurrentTemp);
   if (gap < 5) {
     if (!isWorky && beepIfWorky) beep();
@@ -438,30 +564,42 @@ void SENSORCheck() {
   } else
     isWorky = false;
 
-  if (ShowTemp > 500) TipIsPresent = false;
-  if (!TipIsPresent && (ShowTemp < 500)) {
-    ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
-    beep();
-    TipIsPresent = true;
-    ChangeTipScreen();
-    updateEEPROM();
-    handleMoved = true;
-    RawTemp = denoiseAnalog(SENSOR_PIN);
-    c0 = LOW;
-    setRotary(TEMP_MIN, TEMP_MAX, TEMP_STEP, SetTemp);
+  // checks if tip is present or currently inserted
+  // 检查烙铁头是否存在或当前已插入
+  if (ShowTemp > 500) TipIsPresent = false;  // tip removed ? 烙铁头移除？
+  if (!TipIsPresent &&
+      (ShowTemp < 500)) {  // new tip inserted ? 新的烙铁头插入？
+    ledcWrite(CONTROL_CHANNEL, HEATER_OFF);  // shut off heater 关闭加热器
+    beep();                                  // beep for info
+    TipIsPresent = true;  // tip is present now 烙铁头已经存在
+    ChangeTipScreen();  // show tip selection screen 显示烙铁头选择屏幕
+    updateEEPROM();     // update setting in EEPROM EEPROM的更新设置
+    handleMoved = true;  // reset all timers 重置所有计时器
+    RawTemp = denoiseAnalog(
+        SENSOR_PIN);  // restart temp smooth algorithm 重启临时平滑算法
+    c0 = LOW;         // switch must be released 必须松开开关
+    setRotary(TEMP_MIN, TEMP_MAX, TEMP_STEP,
+              SetTemp);  // reset rotary encoder 重置旋转编码器
   }
 }
 
+// calculates real temperature value according to ADC reading and calibration
+// values 根据ADC读数和校准值，计算出真实的温度值
 void calculateTemp() {
   if (RawTemp < 200)
     CurrentTemp = map(RawTemp, 0, 200, 15, CalTemp[CurrentTip][0]);
   else if (RawTemp < 280)
-    CurrentTemp = map(RawTemp, 200, 280, CalTemp[CurrentTip][0], CalTemp[CurrentTip][1]);
+    CurrentTemp =
+        map(RawTemp, 200, 280, CalTemp[CurrentTip][0], CalTemp[CurrentTip][1]);
   else
-    CurrentTemp = map(RawTemp, 280, 360, CalTemp[CurrentTip][1], CalTemp[CurrentTip][2]);
+    CurrentTemp =
+        map(RawTemp, 280, 360, CalTemp[CurrentTip][1], CalTemp[CurrentTip][2]);
 }
 
+// controls the heater 控制加热器
 void Thermostat() {
+  // define Setpoint acoording to current working mode
+  // 根据当前工作模式定义设定值
   if (inOffMode || inLockMode)
     Setpoint = 0;
   else if (inSleepMode)
@@ -471,8 +609,7 @@ void Thermostat() {
   } else
     Setpoint = SetTemp;
 
-  // FIX: Main screen temperature adjustments stay temporary (no EEPROM overwrite)
-
+  // control the heater (PID or direct) 控制加热器(PID或直接)
   gap = abs(Setpoint - CurrentTemp);
   if (PIDenable) {
     Input = CurrentTemp;
@@ -482,6 +619,8 @@ void Thermostat() {
       ctrl.SetTunings(aggKp, aggKi, aggKd);
     ctrl.Compute();
   } else {
+    // turn on heater if current temperature is below setpoint
+    // 如果当前温度低于设定值，则打开加热器
     if ((CurrentTemp + 0.5) < Setpoint)
       Output = 0;
     else
@@ -493,9 +632,11 @@ void Thermostat() {
   } else if(VoltageValue == 3){
     limit = POWER_LIMIT_20_2;
   }
-  ledcWrite(CONTROL_CHANNEL, constrain((HEATER_PWM), 0, limit));
+  ledcWrite(CONTROL_CHANNEL,
+            constrain((HEATER_PWM), 0, limit));  // set heater PWM 设置加热器PWM
 }
 
+// creates a short beep on the buzzer 在蜂鸣器上创建一个短的哔哔声
 void beep() {
   if (beepEnable) {
     for (uint8_t i = 0; i < 255; i++) {
@@ -507,6 +648,7 @@ void beep() {
   }
 }
 
+// sets start values for rotary encoder 设置旋转编码器的起始值
 void setRotary(int rmin, int rmax, int rstep, int rvalue) {
   countMin = rmin << ROTARY_TYPE;
   countMax = rmax << ROTARY_TYPE;
@@ -514,23 +656,33 @@ void setRotary(int rmin, int rmax, int rstep, int rvalue) {
   count = rvalue << ROTARY_TYPE;
 }
 
+// reads current rotary encoder value 读取当前旋转编码器值
 int getRotary() {
   Button_loop();
   return (count >> ROTARY_TYPE);
 }
 
+// reads user settings from EEPROM; if EEPROM values are invalid, write defaults
+// 从EEPROM读取用户设置;如果EEPROM值无效，则写入默认值
 void getEEPROM() { read_EEPROM(); }
 
+// writes user settings to EEPROM using updade function to minimize write cycles
+// 使用升级功能将用户设置写入EEPROM，以最小化写入周期
 void updateEEPROM() { update_EEPROM(); }
 
+// draws the main screen 绘制主屏幕
 void MainScreen() {
   u8g2.firstPage();
   do {
+    // u8g2.setCursor(0, 0);
+    // u8g2.print(F("nihao"));
+    //  draw setpoint temperature
     u8g2.setFont(PTS200_16);
     if(language == 2){
       u8g2.setFont(u8g2_font_unifont_t_chinese3);
     }
     u8g2.setFontPosTop();
+    //    u8g2.drawUTF8(0, 0 + SCREEN_OFFSET, "设温:");
     u8g2.drawUTF8(0, 0 + SCREEN_OFFSET, txt_set_temp[language]);
     u8g2.setCursor(40, 0 + SCREEN_OFFSET);
     u8g2.setFont(u8g2_font_unifont_t_chinese3);
@@ -540,6 +692,7 @@ void MainScreen() {
     if(language == 2){
       u8g2.setFont(u8g2_font_unifont_t_chinese3);
     }
+    // draw status of heater 绘制加热器状态
     u8g2.setCursor(96, 0 + SCREEN_OFFSET);
     if (ShowTemp > 500)
       u8g2.print(txt_error[language]);
@@ -557,8 +710,10 @@ void MainScreen() {
       u8g2.print(txt_hold[language]);
 
     u8g2.setFont(u8g2_font_unifont_t_chinese3);
+    // rest depending on main screen type 休息取决于主屏幕类型
     if (MainScrType) {
-      float fVin = (float)Vin / 1000;
+      // draw current tip and input voltage 绘制当前烙铁头及输入电压
+      float fVin = (float)Vin / 1000;  // convert mv in V
       newSENSORTmp = newSENSORTmp + 0.01 * getMPUTemp();
       SENSORTmpTime++;
       if (SENSORTmpTime >= 100) {
@@ -572,27 +727,30 @@ void MainScreen() {
       u8g2.setCursor(83, 50);
       u8g2.print(fVin, 1);
       u8g2.print(F("V"));
+      // draw current temperature 绘制当前温度
       u8g2.setFont(u8g2_font_freedoomr25_tn);
       u8g2.setFontPosTop();
       u8g2.setCursor(37, 18);
       if (ShowTemp > 500)
-        u8g2.print(F("---")); // FIX #19: Print "---" instead of "000" for missing/faulty tip
+        u8g2.print(F("---"));
       else
         u8g2.printf("%03d", ShowTemp);
     } else {
+      // draw current temperature in big figures 用大数字绘制当前温度
       u8g2.setFont(u8g2_font_fub42_tn);
       u8g2.setFontPosTop();
       u8g2.setCursor(15, 20);
       if (ShowTemp > 500)
-        u8g2.print(F("---")); // FIX #19: Print "---" instead of "000" for missing/faulty tip
+        u8g2.print(F("---"));
       else
         u8g2.printf("%03d", ShowTemp);
     }
   } while (u8g2.nextPage());
 }
 
+// setup screen 设置屏幕
 void SetupScreen() {
-  ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
+  ledcWrite(CONTROL_CHANNEL, HEATER_OFF);  // shut off heater
   beep();
   uint16_t SaveSetTemp = SetTemp;
   uint8_t selection = 0;
@@ -611,6 +769,9 @@ void SetupScreen() {
       case 2: {
         TimerScreen();
       } break;
+        //      case 3:
+        //        PIDenable = MenuScreen(ControlTypeItems,
+        //        sizeof(ControlTypeItems), PIDenable); break;
       case 3: {
         MainScrType =
             MenuScreen(MainScreenItems, sizeof(MainScreenItems), MainScrType);
@@ -640,10 +801,11 @@ void SetupScreen() {
       } break;
       case 9: {
         bool lastbutton = (!digitalRead(BUTTON_PIN));
-        u8g2.clearBuffer();
-        u8g2.setFont(u8g2_font_ncenB08_tr);
-        u8g2.drawStr(0, 10, "MSC Update");
-        u8g2.sendBuffer();
+        u8g2.clearBuffer();                  // clear the internal memory
+        u8g2.setFont(u8g2_font_ncenB08_tr);  // choose a suitable font
+        u8g2.drawStr(0, 10,
+                     "MSC Update");  // write something to the internal memory
+        u8g2.sendBuffer();           // transfer internal memory to the display
         delay(1000);
         do {
           MSC_Update.onEvent(usbEventCallback);
@@ -683,6 +845,7 @@ void SetupScreen() {
   setRotary(TEMP_MIN, TEMP_MAX, TEMP_STEP, SetTemp);
 }
 
+// tip settings screen 烙铁头设置屏幕
 void TipScreen() {
   uint8_t selection = 0;
   bool repeat = true;
@@ -711,6 +874,7 @@ void TipScreen() {
   }
 }
 
+// temperature settings screen 温度设置屏幕
 void TempScreen() {
   uint8_t selection = 0;
   bool repeat = true;
@@ -736,6 +900,7 @@ void TempScreen() {
   }
 }
 
+// timer settings screen 定时器设置屏幕
 void TimerScreen() {
   uint8_t selection = 0;
   bool repeat = true;
@@ -765,8 +930,10 @@ void TimerScreen() {
   }
 }
 
+// menu screen 菜单屏幕
 uint8_t MenuScreen(const char *Items[][language_types], uint8_t numberOfItems,
                    uint8_t selected) {
+  // Serial.println(numberOfItems);
   bool isTipScreen = ((strcmp(Items[0][language], "烙铁头:") == 0) ||
                       (strcmp(Items[0][language], "Tip:") == 0) ||
                       (strcmp(Items[0][language], "烙鐵頭:") == 0));
@@ -776,6 +943,7 @@ uint8_t MenuScreen(const char *Items[][language_types], uint8_t numberOfItems,
   numberOfItems = numberOfItems / language_types;
   numberOfItems >>= 2;
 
+  // 根据OLED控制器设置选择方向
 #if defined(SSD1306)
   setRotary(0, numberOfItems + 3, 1, selected);
 #elif defined(SH1107)
@@ -793,9 +961,9 @@ uint8_t MenuScreen(const char *Items[][language_types], uint8_t numberOfItems,
     u8g2.firstPage();
     do {
       u8g2.setFont(PTS200_16);
-      if(language == 2){
-        u8g2.setFont(u8g2_font_unifont_t_chinese3);
-      }
+    if(language == 2){
+      u8g2.setFont(u8g2_font_unifont_t_chinese3);
+    }
       u8g2.setFontPosTop();
       u8g2.drawUTF8(0, 0 + SCREEN_OFFSET, Items[0][language]);
       if (isTipScreen)
@@ -824,7 +992,7 @@ void MessageScreen(const char *Items[][language_types], uint8_t numberOfItems) {
   u8g2.firstPage();
   do {
     u8g2.setFont(PTS200_16);
-    if(language == 2){
+        if(language == 2){
       u8g2.setFont(u8g2_font_unifont_t_chinese3);
     }
     u8g2.setFontPosTop();
@@ -840,6 +1008,7 @@ void MessageScreen(const char *Items[][language_types], uint8_t numberOfItems) {
   beep();
 }
 
+// input value screen 输入值屏幕
 uint16_t InputScreen(const char *Items[][language_types]) {
   uint16_t value;
   bool lastbutton = (!digitalRead(BUTTON_PIN));
@@ -849,9 +1018,9 @@ uint16_t InputScreen(const char *Items[][language_types]) {
     u8g2.firstPage();
     do {
       u8g2.setFont(PTS200_16);
-      if(language == 2){
-        u8g2.setFont(u8g2_font_unifont_t_chinese3);
-      }
+          if(language == 2){
+      u8g2.setFont(u8g2_font_unifont_t_chinese3);
+    }
       u8g2.setFontPosTop();
       u8g2.drawUTF8(0, 0 + SCREEN_OFFSET, Items[0][language]);
       u8g2.setCursor(0, 32);
@@ -875,19 +1044,20 @@ uint16_t InputScreen(const char *Items[][language_types]) {
   return value;
 }
 
+// information display screen 信息显示屏幕
 void InfoScreen() {
   bool lastbutton = (!digitalRead(BUTTON_PIN));
 
   do {
-    Vin = getVIN();
-    float fVin = (float)Vin / 1000;
-    float fTmp = getChipTemp();
+    Vin = getVIN();                  // read supply voltage
+    float fVin = (float)Vin / 1000;  // convert mv in V
+    float fTmp = getChipTemp();      // read cold junction temperature
     u8g2.firstPage();
     do {
       u8g2.setFont(PTS200_16);
-      if(language == 2){
-        u8g2.setFont(u8g2_font_unifont_t_chinese3);
-      }
+          if(language == 2){
+      u8g2.setFont(u8g2_font_unifont_t_chinese3);
+    }
       u8g2.setFontPosTop();
       u8g2.setCursor(0, 0 + SCREEN_OFFSET);
       u8g2.print(txt_temp[language]);
@@ -900,6 +1070,8 @@ void InfoScreen() {
       u8g2.setCursor(0, 16 * 2 + SCREEN_OFFSET);
       u8g2.print(txt_Version[language]);
       u8g2.print(VERSION);
+      // u8g2.setCursor(0, 48); u8g2.print(F("IMU:  "));
+      // u8g2.print(accelerometer[1], DEC); u8g2.print(F(""));
     } while (u8g2.nextPage());
     if (lastbutton && digitalRead(BUTTON_PIN)) {
       delay(10);
@@ -910,6 +1082,7 @@ void InfoScreen() {
   beep();
 }
 
+// change tip screen 改变烙铁头屏幕
 void ChangeTipScreen() {
   uint8_t selected = CurrentTip;
   uint8_t lastselected = selected;
@@ -932,10 +1105,11 @@ void ChangeTipScreen() {
     u8g2.firstPage();
     do {
       u8g2.setFont(PTS200_16);
-      if(language == 2){
-        u8g2.setFont(u8g2_font_unifont_t_chinese3);
-      }
+          if(language == 2){
+      u8g2.setFont(u8g2_font_unifont_t_chinese3);
+    }
       u8g2.setFontPosTop();
+      //      strcpy_P(F_Buffer, PSTR("选择烙铁头"));
       u8g2.drawUTF8(0, 0 + SCREEN_OFFSET, txt_select_tip[language]);
       u8g2.drawUTF8(0, 16 * (arrow + 1) + SCREEN_OFFSET, ">");
       for (uint8_t i = 0; i < 3; i++) {
@@ -955,6 +1129,7 @@ void ChangeTipScreen() {
   CurrentTip = selected;
 }
 
+// temperature calibration screen 温度校准屏幕
 void CalibrationScreen() {
   uint16_t CalTempNew[4];
   uint16_t tempSetTemp = SetTemp;
@@ -967,16 +1142,18 @@ void CalibrationScreen() {
     bool lastbutton = (!digitalRead(BUTTON_PIN));
 
     do {
-      SENSORCheck();
-      Thermostat();
+      SENSORCheck();  // reads temperature and vibration switch of the iron
+                      // 读取烙铁头的温度和振动开关
+      Thermostat();   // heater control
 
       u8g2.firstPage();
       do {
         u8g2.setFont(PTS200_16);
-        if(language == 2){
-          u8g2.setFont(u8g2_font_unifont_t_chinese3);
-        }
+            if(language == 2){
+      u8g2.setFont(u8g2_font_unifont_t_chinese3);
+    }
         u8g2.setFontPosTop();
+        //        strcpy_P(F_Buffer, PSTR("校准"));
         u8g2.drawUTF8(0, 0 + SCREEN_OFFSET, txt_calibrate[language]);
         u8g2.setCursor(0, 16 + SCREEN_OFFSET);
         u8g2.print(txt_step[language]);
@@ -1007,13 +1184,13 @@ void CalibrationScreen() {
     delay(10);
   }
 
-  ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
+  ledcWrite(CONTROL_CHANNEL, HEATER_OFF);  // shut off heater 关闭加热器
   if (VoltageValue == 3) {
     delayMicroseconds(TIME2SETTLE_20V);
   } else {
-    delayMicroseconds(TIME2SETTLE);
+    delayMicroseconds(TIME2SETTLE);  // wait for voltage to settle 等待电压稳定
   }
-  CalTempNew[3] = getChipTemp();
+  CalTempNew[3] = getChipTemp();  // read chip temperature 读芯片温度
   if ((CalTempNew[0] + 10 < CalTempNew[1]) &&
       (CalTempNew[1] + 10 < CalTempNew[2])) {
     if (MenuScreen(StoreItems, sizeof(StoreItems), 0)) {
@@ -1025,6 +1202,7 @@ void CalibrationScreen() {
   update_EEPROM();
 }
 
+// input tip name screen 输入烙铁头名字屏幕
 void InputNameScreen() {
   uint8_t value;
 
@@ -1044,9 +1222,9 @@ void InputNameScreen() {
       u8g2.firstPage();
       do {
         u8g2.setFont(PTS200_16);
-        if(language == 2){
-          u8g2.setFont(u8g2_font_unifont_t_chinese3);
-        }
+            if(language == 2){
+      u8g2.setFont(u8g2_font_unifont_t_chinese3);
+    }
         u8g2.setFontPosTop();
         u8g2.drawUTF8(0, 0 + SCREEN_OFFSET, txt_enter_tip_name[language]);
         u8g2.setCursor(12 * digit, 48 + SCREEN_OFFSET);
@@ -1069,6 +1247,7 @@ void InputNameScreen() {
   return;
 }
 
+// delete tip screen 删除烙铁头屏幕
 void DeleteTipScreen() {
   if (NumberOfTips == 1) {
     MessageScreen(DeleteMessage, sizeof(DeleteMessage));
@@ -1086,6 +1265,7 @@ void DeleteTipScreen() {
   }
 }
 
+// add new tip screen 添加新的烙铁头屏幕
 void AddTipScreen() {
   if (NumberOfTips < TIPMAX) {
     CurrentTip = NumberOfTips++;
@@ -1098,21 +1278,25 @@ void AddTipScreen() {
     MessageScreen(MaxTipMessage, sizeof(MaxTipMessage));
 }
 
+// 对32个ADC读数进行平均以降噪
+//  VP+_Ru = 100k, Rd_GND = 1K
 uint16_t denoiseAnalog(byte port) {
   uint32_t result = 0;
   float maxValue, minValue;
   int resultArray[8];
 
   for (uint8_t i = 0; i < 8; i++) {
+    // get 32 readings and sort them 获取32个读数并对其进行排序
     float value, raw_adc;
 
     raw_adc = adc_sensor.readMiliVolts();
-    // TS-100 adjusted linear conversion formula:
-    value = constrain(0.4432 * raw_adc + 29.665, 20, 1000);
+    value = constrain(0.4432 * raw_adc + 29.665, 20, 1000); // Dexter TS-100 temperature calibration fix
 
     resultArray[i] = value;
   }
 
+  // sort resultArray with low time complexity
+  // 用低时间复杂度对resultArray进行排序
   for (uint8_t i = 0; i < 8; i++) {
     for (uint8_t j = i + 1; j < 8; j++) {
       if (resultArray[i] > resultArray[j]) {
@@ -1123,13 +1307,19 @@ uint16_t denoiseAnalog(byte port) {
     }
   }
 
+  // get the average of the middle 4 readings 获取中间20个读数的平均值
   for (uint8_t i = 2; i < 6; i++) {
     result += resultArray[i];
   }
 
-  return (result / 4);
+  //  Serial.printf("raw_val: %d", adc_sensor.readMiliVolts());
+  //  Serial.println();
+  // Serial.printf("val: %d", result / 4);
+  // Serial.println();
+  return (result / 4);  // devide by 32 and return value 除以32并返回值
 }
 
+// 读取SENSOR内部温度
 double getChipTemp() {
 #if defined(MPU)
   mpu6050.update();
@@ -1141,6 +1331,7 @@ double getChipTemp() {
   return Temp;
 }
 
+// get LIS/MPU temperature 获取LIS/MPU的温度
 float getMPUTemp() {
 #if defined(MPU)
   mpu6050.update();
@@ -1152,27 +1343,58 @@ float getMPUTemp() {
   return Temp;
 }
 
+// get supply voltage in mV 得到以mV为单位的电源电压
 uint16_t getVIN() {
   long value;
   long voltage;
   long result = 0;
 
-  for (uint8_t i = 0; i < 4; i++) {
+  for (uint8_t i = 0; i < 4; i++) {  // get 32 readings 得到32个读数
+    //    long val = analogRead(VIN_PIN);
     long val = adc_vin.readMiliVolts();
-    result += val;
+
+    result += val;  // add them up 把它们加起来
   }
 
   value = (result / 4);
+
+  //  // VIN_Ru = 100k, Rd_GND = 3.3K
+  //  if (value < 500)
+  //  {
+  //    voltage = value * 1390 * 31.3 / 4095 * 1.35;
+  //  }
+  //  else if (500 <= value && value < 1000)
+  //  {
+  //    voltage = value * 1390 * 31.3 / 4095 * 1.135;
+  //  }
+  //  else if (1000 <= value && value < 1500)
+  //  {
+  //    voltage = value * 1390 * 31.3 / 4095 * 1.071;
+  //  }
+  //  else if (1500 <= value && value < 2000)
+  //  {
+  //    voltage = value * 1390 * 31.3 / 4095;
+  //  }
+  //  else if (2000 <= value && value < 3000)
+  //  {
+  //    voltage = value * 1390 * 31.3 / 4095;
+  //  }
+  //  else
+  //    voltage = value * 1390 * 31.3 / 4095;
+
   voltage = value * 31.3;
 
   return voltage;
+  // return value;
 }
 
 int32_t variance(int16_t a[]) {
+  // Compute mean (average of elements)计算平均值(元素的平均值)
   int32_t sum = 0;
 
   for (int i = 0; i < 32; i++) sum += a[i];
   int16_t mean = (int32_t)sum / 32;
+  // Compute sum squared differences with mean.计算和平方差的平均值
   int32_t sqDiff = 0;
   for (int i = 0; i < 32; i++) sqDiff += (a[i] - mean) * (a[i] - mean);
   return (int32_t)sqDiff / 32;
@@ -1195,7 +1417,7 @@ void Button_loop() {
     }
   } else if (!digitalRead(BUTTON_N_PIN) && a0 == 0) {
     delay(BUTTON_DELAY);
-    if (Button_Time1 > 10)
+    if (Button_Time1 > 10)  // 这里的数越大，需要长按时间更长
       count = constrain(count + countStep, countMin, countMax);
     else
       Button_Time1++;
@@ -1218,7 +1440,7 @@ void Button_loop() {
     }
   } else if (!digitalRead(BUTTON_P_PIN) && b0 == 0) {
     delay(BUTTON_DELAY);
-    if (Button_Time2 > 10)
+    if (Button_Time2 > 10)  // 这里的数越大，需要长按时间更长
       count = constrain(count - countStep, countMin, countMax);
     else
       Button_Time2++;
@@ -1266,72 +1488,105 @@ void PD_Update() {
   }
 
   ledcAttachPin(CONTROL_PIN, CONTROL_CHANNEL);
+
+  // analogWrite(CONTROL_PIN, HEATER_OFF); // this shuts off the
+  // heater这是用来关闭加热器的
   ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
 }
 
 static void usbEventCallback(void *arg, esp_event_base_t event_base,
                              int32_t event_id, void *event_data) {
   if (event_base == ARDUINO_USB_EVENTS) {
+    // arduino_usb_event_data_t* data = (arduino_usb_event_data_t*)event_data;
     switch (event_id) {
       case ARDUINO_USB_STARTED_EVENT:
-        u8g2.clearBuffer();
-        u8g2.setFont(u8g2_font_ncenB08_tr);
-        u8g2.drawStr(0, 10, "USB PLUGGED");
-        u8g2.sendBuffer();
+        // HWSerial.println("USB PLUGGED");
+        u8g2.clearBuffer();                  // clear the internal memory
+        u8g2.setFont(u8g2_font_ncenB08_tr);  // choose a suitable font
+        u8g2.drawStr(0, 10,
+                     "USB PLUGGED");  // write something to the internal memory
+        u8g2.sendBuffer();            // transfer internal memory to the display
         break;
       case ARDUINO_USB_STOPPED_EVENT:
-        u8g2.clearBuffer();
-        u8g2.setFont(u8g2_font_ncenB08_tr);
-        u8g2.drawStr(0, 10, "USB UNPLUGGED");
-        u8g2.sendBuffer();
+        // HWSerial.println("USB UNPLUGGED");
+        u8g2.clearBuffer();                  // clear the internal memory
+        u8g2.setFont(u8g2_font_ncenB08_tr);  // choose a suitable font
+        u8g2.drawStr(
+            0, 10, "USB UNPLUGGED");  // write something to the internal memory
+        u8g2.sendBuffer();            // transfer internal memory to the display
         break;
       case ARDUINO_USB_SUSPEND_EVENT:
-        u8g2.clearBuffer();
-        u8g2.setFont(u8g2_font_ncenB08_tr);
-        u8g2.drawStr(0, 10, "USB SUSPENDED");
-        u8g2.sendBuffer();
+        // HWSerial.printf("USB SUSPENDED: remote_wakeup_en: %u\n",
+        // data->suspend.remote_wakeup_en);
+        u8g2.clearBuffer();                  // clear the internal memory
+        u8g2.setFont(u8g2_font_ncenB08_tr);  // choose a suitable font
+        u8g2.drawStr(
+            0, 10, "USB SUSPENDED");  // write something to the internal memory
+        u8g2.sendBuffer();            // transfer internal memory to the display
         break;
       case ARDUINO_USB_RESUME_EVENT:
-        u8g2.clearBuffer();
-        u8g2.setFont(u8g2_font_ncenB08_tr);
-        u8g2.drawStr(0, 10, "USB RESUMED");
-        u8g2.sendBuffer();
+        // HWSerial.println("USB RESUMED");
+        u8g2.clearBuffer();                  // clear the internal memory
+        u8g2.setFont(u8g2_font_ncenB08_tr);  // choose a suitable font
+        u8g2.drawStr(0, 10,
+                     "USB RESUMED");  // write something to the internal memory
+        u8g2.sendBuffer();            // transfer internal memory to the display
         break;
 
       default:
         break;
     }
   } else if (event_base == ARDUINO_FIRMWARE_MSC_EVENTS) {
+    // arduino_firmware_msc_event_data_t* data =
+    // (arduino_firmware_msc_event_data_t*)event_data;
     switch (event_id) {
       case ARDUINO_FIRMWARE_MSC_START_EVENT:
-        u8g2.clearBuffer();
-        u8g2.setFont(u8g2_font_ncenB08_tr);
-        u8g2.drawStr(0, 10, "MSC Update Start");
-        u8g2.sendBuffer();
+        // HWSerial.println("MSC Update Start");
+        u8g2.clearBuffer();                  // clear the internal memory
+        u8g2.setFont(u8g2_font_ncenB08_tr);  // choose a suitable font
+        u8g2.drawStr(
+            0, 10,
+            "MSC Update Start");  // write something to the internal memory
+        u8g2.sendBuffer();        // transfer internal memory to the display
         break;
       case ARDUINO_FIRMWARE_MSC_WRITE_EVENT:
-        u8g2.clearBuffer();
-        u8g2.setFont(u8g2_font_ncenB08_tr);
-        u8g2.drawStr(0, 10, "MSC Updating");
-        u8g2.sendBuffer();
+        // HWSerial.printf("MSC Update Write %u bytes at offset %u\n",
+        // data->write.size, data->write.offset);
+        //  HWSerial.print(".");
+        u8g2.clearBuffer();                  // clear the internal memory
+        u8g2.setFont(u8g2_font_ncenB08_tr);  // choose a suitable font
+        u8g2.drawStr(0, 10,
+                     "MSC Updating");  // write something to the internal memory
+        u8g2.sendBuffer();  // transfer internal memory to the display
         break;
       case ARDUINO_FIRMWARE_MSC_END_EVENT:
-        u8g2.clearBuffer();
-        u8g2.setFont(u8g2_font_ncenB08_tr);
-        u8g2.drawStr(0, 10, "MSC Update End");
-        u8g2.sendBuffer();
+        // HWSerial.printf("\nMSC Update End: %u bytes\n", data->end.size);
+        u8g2.clearBuffer();                  // clear the internal memory
+        u8g2.setFont(u8g2_font_ncenB08_tr);  // choose a suitable font
+        u8g2.drawStr(
+            0, 10, "MSC Update End");  // write something to the internal memory
+        u8g2.sendBuffer();  // transfer internal memory to the display
         break;
       case ARDUINO_FIRMWARE_MSC_ERROR_EVENT:
-        u8g2.clearBuffer();
-        u8g2.setFont(u8g2_font_ncenB08_tr);
-        u8g2.drawStr(0, 10, "MSC Update ERROR!");
-        u8g2.sendBuffer();
+        // HWSerial.printf("MSC Update ERROR! Progress: %u bytes\n",
+        // data->error.size);
+        u8g2.clearBuffer();                  // clear the internal memory
+        u8g2.setFont(u8g2_font_ncenB08_tr);  // choose a suitable font
+        u8g2.drawStr(
+            0, 10,
+            "MSC Update ERROR!");  // write something to the internal memory
+        u8g2.sendBuffer();         // transfer internal memory to the display
         break;
       case ARDUINO_FIRMWARE_MSC_POWER_EVENT:
-        u8g2.clearBuffer();
-        u8g2.setFont(u8g2_font_ncenB08_tr);
-        u8g2.drawStr(0, 10, "MSC Update Power");
-        u8g2.sendBuffer();
+        // HWSerial.printf("MSC Update Power: power: %u, start: %u, eject: %u",
+        // data->power.power_condition, data->power.start,
+        // data->power.load_eject);
+        u8g2.clearBuffer();                  // clear the internal memory
+        u8g2.setFont(u8g2_font_ncenB08_tr);  // choose a suitable font
+        u8g2.drawStr(
+            0, 10,
+            "MSC Update Power");  // write something to the internal memory
+        u8g2.sendBuffer();        // transfer internal memory to the display
         break;
 
       default:
@@ -1342,12 +1597,37 @@ static void usbEventCallback(void *arg, esp_event_base_t event_base,
 
 void turnOffHeater(Button2 &b) { inOffMode = true; }
 
+// uint16_t calibrate_adc(adc_unit_t adc, adc_atten_t channel) {
+//   uint16_t vref;
+//   esp_adc_cal_characteristics_t adc_chars;
+//   esp_adc_cal_value_t val_type = esp_adc_cal_characterize((adc_unit_t)adc,
+//   (adc_atten_t)channel, (adc_bits_width_t)ADC_WIDTH_BIT_12, 1100,
+//   &adc_chars);
+//   //Check type of calibration value used to characterize ADC
+//   if (val_type == ESP_ADC_CAL_VAL_EFUSE_VREF) {
+//     Serial.printf("eFuse Vref:%u mV", adc_chars.vref);
+//     Serial.println();
+//     vref = adc_chars.vref;
+//   } else if (val_type == ESP_ADC_CAL_VAL_EFUSE_TP) {
+//     Serial.printf("Two Point --> coeff_a:%umV coeff_b:%umV\n",
+//     adc_chars.coeff_a, adc_chars.coeff_b); Serial.println();
+//   } else {
+//     Serial.println("Default Vref: 1100mV");
+//   }
+//   return vref;
+// }
+
 void heatWithLimit() {
+  // ledcSetup(channel, hertz, resolution);
+  // ledcAttachPin(pin, channel);
+
   limit = 0;
   if (VoltageValue < 3) {
     limit = POWER_LIMIT_15;
   } else if (VoltageValue == 3) {
     limit = POWER_LIMIT_20;
   }
-  ledcWrite(CONTROL_CHANNEL, constrain(HEATER_PWM, 0, limit));
+  ledcWrite(
+      CONTROL_CHANNEL,
+      constrain(HEATER_PWM, 0, limit));  // turn on again heater 再次打开加热器
 }
