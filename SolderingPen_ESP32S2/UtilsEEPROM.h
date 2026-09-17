@@ -1,30 +1,33 @@
+#ifndef UTILS_EEPROM_H
+#define UTILS_EEPROM_H
+
 #include <EEPROM.h>
 
-#define ADDR_SYSTEM_INIT_FLAG 0
-#define ADDR_DEFAULT_TEMP ADDR_SYSTEM_INIT_FLAG + 4
-#define ADDR_SLEEP_TEMP ADDR_DEFAULT_TEMP + 2
-#define ADDR_BOOST_TEMP ADDR_SLEEP_TEMP + 2
-#define ADDR_TIME_2_SLEEP ADDR_BOOST_TEMP + 1
-#define ADDR_TIME_2_OFF ADDR_TIME_2_SLEEP + 2
-#define ADDR_TIME_OF_BOOST ADDR_TIME_2_OFF + 1
-#define ADDR_MAIN_SCREEN ADDR_TIME_OF_BOOST + 1
-#define ADDR_PID_ENABLE ADDR_MAIN_SCREEN + 1
-#define ADDR_BEEP_ENABLE ADDR_PID_ENABLE + 1
-#define ADDR_VOLTAGE_VALUE ADDR_BEEP_ENABLE + 1
-#define ADDR_QC_ENABLE ADDR_VOLTAGE_VALUE + 1
-#define ADDR_WAKEUP_THRESHOLD ADDR_QC_ENABLE + 1
-#define ADDR_CURRENT_TIP ADDR_WAKEUP_THRESHOLD + 1
-#define ADDR_NUMBER_OF_TIPS ADDR_CURRENT_TIP + 1
+#define ADDR_SYSTEM_INIT_FLAG (0)
+#define ADDR_DEFAULT_TEMP (ADDR_SYSTEM_INIT_FLAG + 4)
+#define ADDR_SLEEP_TEMP (ADDR_DEFAULT_TEMP + 2)
+#define ADDR_BOOST_TEMP (ADDR_SLEEP_TEMP + 2)
+#define ADDR_TIME_2_SLEEP (ADDR_BOOST_TEMP + 1)
+#define ADDR_TIME_2_OFF (ADDR_TIME_2_SLEEP + 2)
+#define ADDR_TIME_OF_BOOST (ADDR_TIME_2_OFF + 1)
+#define ADDR_MAIN_SCREEN (ADDR_TIME_OF_BOOST + 1)
+#define ADDR_PID_ENABLE (ADDR_MAIN_SCREEN + 1)
+#define ADDR_BEEP_ENABLE (ADDR_PID_ENABLE + 1)
+#define ADDR_VOLTAGE_VALUE (ADDR_BEEP_ENABLE + 1)
+#define ADDR_QC_ENABLE (ADDR_VOLTAGE_VALUE + 1)
+#define ADDR_WAKEUP_THRESHOLD (ADDR_QC_ENABLE + 1)
+#define ADDR_CURRENT_TIP (ADDR_WAKEUP_THRESHOLD + 1)
+#define ADDR_NUMBER_OF_TIPS (ADDR_CURRENT_TIP + 1)
 
-#define ADDR_TIP_NAME ADDR_NUMBER_OF_TIPS + 1
-#define ADDR_CAL_TEMP ADDR_TIP_NAME + TIPNAMELENGTH *TIPMAX
+#define ADDR_TIP_NAME (ADDR_NUMBER_OF_TIPS + 1)
+#define ADDR_CAL_TEMP (ADDR_TIP_NAME + (TIPNAMELENGTH * TIPMAX))
 
-#define ADDR_LANGUAGE ADDR_CAL_TEMP + 2 * CALNUM *TIPMAX
-#define ADDR_HAND_SIDE ADDR_LANGUAGE + 1
+#define ADDR_LANGUAGE (ADDR_CAL_TEMP + (2 * CALNUM * TIPMAX))
+#define ADDR_HAND_SIDE (ADDR_LANGUAGE + 1)
 
-#define ADDR_EEPROM_SIZE ADDR_HAND_SIDE + 1
+#define ADDR_EEPROM_SIZE (ADDR_HAND_SIDE + 1)
 
-bool system_init_flag = false;
+extern bool system_init_flag;
 
 extern uint16_t DefaultTemp;
 extern uint16_t SleepTemp;
@@ -70,7 +73,6 @@ bool write_default_EEPROM()
   CalTemp[0][1] = TEMP280;
   CalTemp[0][2] = TEMP360;
   CalTemp[0][3] = TEMPCHP;
-  //  TipName[0][TIPNAMELENGTH] = {TIPNAME};
 
   for (uint8_t i = 0; i < 1; i++)
   {
@@ -104,9 +106,6 @@ bool init_EEPROM()
   if (!EEPROM.begin(ADDR_EEPROM_SIZE))
   {
     Serial.println("Failed to initialise EEPROM");
-    //    Serial.println("Restarting...");
-    //    delay(1000);
-    //    ESP.restart();
     return false;
   }
   Serial.println("EEPROM Done");
@@ -162,18 +161,11 @@ bool read_EEPROM()
 {
   Serial.println("Reading EEPROM");
 
-  //  write_default_EEPROM();
-
-  //  system_init_flag = EEPROM.readUInt(ADDR_SYSTEM_INIT_FLAG);
-
   if (EEPROM.readUInt(ADDR_SYSTEM_INIT_FLAG) != VERSION_NUM)
   {
-    //    return false;
     Serial.println("System didn't initialised");
     write_default_EEPROM();
   }
-
-  //  EEPROM.readString(ADDR_WIFI_SSID_1).toCharArray(WiFi_SSID_1, sizeof(WiFi_SSID_1));
 
   DefaultTemp = EEPROM.readUShort(ADDR_DEFAULT_TEMP);
   SleepTemp = EEPROM.readUShort(ADDR_SLEEP_TEMP);
@@ -189,6 +181,10 @@ bool read_EEPROM()
   WAKEUPthreshold = EEPROM.readUChar(ADDR_WAKEUP_THRESHOLD);
   CurrentTip = EEPROM.readUChar(ADDR_CURRENT_TIP);
   NumberOfTips = EEPROM.readUChar(ADDR_NUMBER_OF_TIPS);
+
+  // FIX: Validate bounds to prevent buffer overflow and RAM corruption
+  if (NumberOfTips == 0 || NumberOfTips > TIPMAX) NumberOfTips = 1;
+  if (CurrentTip >= NumberOfTips) CurrentTip = 0;
 
   for (uint8_t i = 0; i < NumberOfTips; i++)
   {
@@ -222,3 +218,5 @@ bool update_default_temp_EEPROM()
     return false;
   }
 }
+
+#endif
