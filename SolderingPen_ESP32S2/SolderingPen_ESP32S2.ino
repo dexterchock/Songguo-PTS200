@@ -125,7 +125,6 @@ bool MSC_Updating_Flag = false;
 Button2 btn;
 float limit = 0.0;
 
-// Helper function to return configured power limit based on VoltageValue
 uint8_t getPowerLimit() {
   if (VoltageValue < 3) {
     return POWER_LIMIT_15;
@@ -152,12 +151,22 @@ void setup() {
   pinMode(BUTTON_N_PIN, INPUT_PULLUP);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
 
-  init_EEPROM();
+  // FIX: Explicitly trap hardware initialization failure
+  if (!init_EEPROM()) {
+    Serial.println("EEPROM initialization failed!");
+    while (true) { delay(1000); }
+  }
+
   if (digitalRead(BUTTON_P_PIN) == LOW && digitalRead(BUTTON_N_PIN) == LOW &&
       digitalRead(BUTTON_PIN) == HIGH) {
     write_default_EEPROM();
   }
-  getEEPROM();
+
+  // FIX: Explicitly trap EEPROM read/repair failure
+  if (!read_EEPROM()) {
+    Serial.println("EEPROM read/repair failed!");
+    while (true) { delay(1000); }
+  }
 
   pinMode(PD_CFG_0, OUTPUT);
   pinMode(PD_CFG_1, OUTPUT);
@@ -385,14 +394,17 @@ void SENSORCheck() {
     SensorCounter = 0;
   }
 
-  // FIX: Only restore heater if iron is actively heating (not locked, off, or sleeping)
-  if (!inLockMode && !inOffMode && !inSleepMode) {
-    limit = getPowerLimit();
-    ledcWrite(CONTROL_CHANNEL, constrain(HEATER_PWM, 0, limit));
-  }
-
+  // FIX: Calculate smoothed temperature BEFORE evaluating heater restore condition
   RawTemp += (temp - RawTemp) * SMOOTHIE;
   calculateTemp();
+
+  // FIX: Only restore heater if iron is active AND current temperature is valid (<= 500°C)
+  if (!inLockMode && !inOffMode && !inSleepMode && CurrentTemp <= 500.0) {
+    limit = getPowerLimit();
+    ledcWrite(CONTROL_CHANNEL, constrain(HEATER_PWM, 0, limit));
+  } else {
+    ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
+  }
 
   if ((ShowTemp != Setpoint) || (abs(ShowTemp - CurrentTemp) > 5))
     ShowTemp = CurrentTemp;
@@ -430,20 +442,34 @@ void calculateTemp() {
     CurrentTemp =
         map(RawTemp, 280, 360, CalTemp[CurrentTip][1], CalTemp[CurrentTip][2]);
   } else {
-    // FIX: Handle RawTemp > 360 safely
     if (RawTemp >= 950) {
       CurrentTemp = 999;  // Disconnected tip / ADC open circuit saturation
     } else {
-      CurrentTemp = map(RawTemp, 280, 360, CalTemp[CurrentTip][1], CalTemp[CurrentTip][2]);
-      if (CurrentTemp > 480) CurrentTemp = 480; // Cap legitimate high temp to prevent false tip error
+      float slope = (float)(CalTemp[CurrentTip][2] - CalTemp[CurrentTip][1]) / (360.0f - 280.0f);
+      CurrentTemp = CalTemp[CurrentTip][2] + slope * (RawTemp - 360.0f);
+      if (CurrentTemp > 480.0f) CurrentTemp = 480.0f;
     }
   }
 }
 
 void Thermostat() {
-  if (inOffMode || inLockMode)
+  // FIX: Absolute priority safety guard for missing/disconnected tip
+  if (CurrentTemp > 500.0) {
     Setpoint = 0;
-  else if (inSleepMode)
+    Output = 0;
+    ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
+    return;
+  }
+
+  // FIX: Absolute priority safety guard for locked or off mode
+  if (inOffMode || inLockMode) {
+    Setpoint = 0;
+    Output = 0;
+    ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
+    return;
+  }
+
+  if (inSleepMode)
     Setpoint = SleepTemp;
   else if (inBoostMode) {
     Setpoint = constrain(SetTemp + BoostTemp, 0, 450);
@@ -923,7 +949,6 @@ void ChangeTipScreen() {
 }
 
 void CalibrationScreen() {
-  // FIX: Reset operating mode flags before calibration to prevent sleep/off timeouts
   inLockMode = false;
   inSleepMode = false;
   inOffMode = false;
