@@ -151,18 +151,20 @@ void setup() {
   pinMode(BUTTON_N_PIN, INPUT_PULLUP);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
 
-  // FIX: Explicitly trap hardware initialization failure
   if (!init_EEPROM()) {
     Serial.println("EEPROM initialization failed!");
     while (true) { delay(1000); }
   }
 
+  // FIX: Trapped return status on manual factory reset button combination
   if (digitalRead(BUTTON_P_PIN) == LOW && digitalRead(BUTTON_N_PIN) == LOW &&
       digitalRead(BUTTON_PIN) == HIGH) {
-    write_default_EEPROM();
+    if (!write_default_EEPROM()) {
+      Serial.println("Failed to write default EEPROM");
+      while (true) { delay(1000); }
+    }
   }
 
-  // FIX: Explicitly trap EEPROM read/repair failure
   if (!read_EEPROM()) {
     Serial.println("EEPROM read/repair failed!");
     while (true) { delay(1000); }
@@ -319,9 +321,7 @@ void SLEEPCheck() {
     if (handleMoved) {
       u8g2.setPowerSave(0);
       if (inSleepMode) {
-        limit = getPowerLimit();
-        if ((CurrentTemp + 20) < SetTemp)
-          ledcWrite(CONTROL_CHANNEL, constrain(HEATER_ON, 0, limit));
+        // FIX: Removed direct ledcWrite() heating command; Thermostat() handles power safely
         beep();
         beepIfWorky = true;
       }
@@ -394,12 +394,11 @@ void SENSORCheck() {
     SensorCounter = 0;
   }
 
-  // FIX: Calculate smoothed temperature BEFORE evaluating heater restore condition
   RawTemp += (temp - RawTemp) * SMOOTHIE;
   calculateTemp();
 
-  // FIX: Only restore heater if iron is active AND current temperature is valid (<= 500°C)
-  if (!inLockMode && !inOffMode && !inSleepMode && CurrentTemp <= 500.0) {
+  // FIX: Standardized strict boundary condition check (< 500.0)
+  if (!inLockMode && !inOffMode && !inSleepMode && CurrentTemp < 500.0) {
     limit = getPowerLimit();
     ledcWrite(CONTROL_CHANNEL, constrain(HEATER_PWM, 0, limit));
   } else {
@@ -418,7 +417,7 @@ void SENSORCheck() {
   } else
     isWorky = false;
 
-  if (ShowTemp > 500) TipIsPresent = false;
+  if (ShowTemp >= 500) TipIsPresent = false;
   if (!TipIsPresent && (ShowTemp < 500)) {
     ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
     beep();
@@ -453,15 +452,14 @@ void calculateTemp() {
 }
 
 void Thermostat() {
-  // FIX: Absolute priority safety guard for missing/disconnected tip
-  if (CurrentTemp > 500.0) {
+  // FIX: Standardized strict boundary condition check (>= 500.0)
+  if (CurrentTemp >= 500.0) {
     Setpoint = 0;
     Output = 0;
     ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
     return;
   }
 
-  // FIX: Absolute priority safety guard for locked or off mode
   if (inOffMode || inLockMode) {
     Setpoint = 0;
     Output = 0;
@@ -540,7 +538,7 @@ void MainScreen() {
     }
 
     const char *status_str = txt_hold[language];
-    if (ShowTemp > 500)
+    if (ShowTemp >= 500)
       status_str = txt_error[language];
     else if (inOffMode || inLockMode)
       status_str = txt_off[language];
@@ -577,7 +575,7 @@ void MainScreen() {
       u8g2.setFont(u8g2_font_freedoomr25_tn);
       u8g2.setFontPosTop();
       u8g2.setCursor(37, 18);
-      if (ShowTemp > 500)
+      if (ShowTemp >= 500)
         u8g2.print(F("---"));
       else
         u8g2.printf("%03d", ShowTemp);
@@ -585,7 +583,7 @@ void MainScreen() {
       u8g2.setFont(u8g2_font_fub42_tn);
       u8g2.setFontPosTop();
       u8g2.setCursor(15, 20);
-      if (ShowTemp > 500)
+      if (ShowTemp >= 500)
         u8g2.print(F("---"));
       else
         u8g2.printf("%03d", ShowTemp);
@@ -635,8 +633,10 @@ void SetupScreen() {
                                             restore_default_config);
         if (restore_default_config) {
           restore_default_config = false;
-          write_default_EEPROM();
-          read_EEPROM();
+          // FIX: Checked return values for menu config restoration
+          if (!write_default_EEPROM() || !read_EEPROM()) {
+            Serial.println("Failed to restore default EEPROM");
+          }
         }
       } break;
       case 9: {
