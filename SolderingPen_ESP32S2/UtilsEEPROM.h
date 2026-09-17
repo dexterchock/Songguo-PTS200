@@ -189,7 +189,16 @@ bool read_EEPROM()
 
   bool dirty = false;
 
-  // EEPROM bounds validation
+  // EEPROM temperature & timer bounds validation
+  if (DefaultTemp < TEMP_MIN || DefaultTemp > TEMP_MAX) { DefaultTemp = TEMP_DEFAULT; dirty = true; }
+  if (SleepTemp < 50 || SleepTemp > TEMP_MAX) { SleepTemp = TEMP_SLEEP; dirty = true; }
+  if (BoostTemp < 10 || BoostTemp > 100) { BoostTemp = TEMP_BOOST; dirty = true; }
+  if (time2sleep > 600) { time2sleep = TIME2SLEEP; dirty = true; }
+  if (time2off > 60) { time2off = TIME2OFF; dirty = true; }
+  if (timeOfBoost > 180) { timeOfBoost = TIMEOFBOOST; dirty = true; }
+  if (WAKEUPthreshold > 50) { WAKEUPthreshold = WAKEUP_THRESHOLD; dirty = true; }
+
+  // EEPROM system bounds validation
   if (NumberOfTips == 0 || NumberOfTips > TIPMAX) { NumberOfTips = 1; dirty = true; }
   if (CurrentTip >= NumberOfTips) { CurrentTip = 0; dirty = true; }
   if (VoltageValue > 4) { VoltageValue = VOLTAGE_VALUE; dirty = true; }
@@ -203,6 +212,19 @@ bool read_EEPROM()
     for (uint8_t j = 0; j < CALNUM; j++)
     {
       CalTemp[i][j] = EEPROM.readUShort(ADDR_CAL_TEMP + i * 2 * CALNUM + j * 2);
+    }
+
+    // EEPROM calibration array validation per tip
+    if (CalTemp[i][0] < 100 || CalTemp[i][0] > 500 ||
+        CalTemp[i][1] < 100 || CalTemp[i][1] > 500 ||
+        CalTemp[i][2] < 100 || CalTemp[i][2] > 500 ||
+        CalTemp[i][0] + 10 >= CalTemp[i][1] ||
+        CalTemp[i][1] + 10 >= CalTemp[i][2]) {
+      CalTemp[i][0] = TEMP200;
+      CalTemp[i][1] = TEMP280;
+      CalTemp[i][2] = TEMP360;
+      CalTemp[i][3] = TEMPCHP;
+      dirty = true;
     }
   }
 
