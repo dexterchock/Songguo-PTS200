@@ -251,6 +251,8 @@ void setup() {
   limit = POWER_LIMIT_20;
   if (VoltageValue < 3) {
     limit = POWER_LIMIT_15;
+  } else if (VoltageValue == 3) {
+    limit = POWER_LIMIT_20_2;
   }
   if (((CurrentTemp + 20) < DefaultTemp) && !inLockMode)
     ledcWrite(CONTROL_CHANNEL, constrain(HEATER_ON, 0, limit));
@@ -400,6 +402,8 @@ void SLEEPCheck() {
         limit = POWER_LIMIT_20;
         if (VoltageValue < 3) {
           limit = POWER_LIMIT_15;
+        } else if (VoltageValue == 3) {
+          limit = POWER_LIMIT_20_2;
         }
         if ((CurrentTemp + 20) <
             SetTemp)  // if temp is well below setpoint 如果温度远低于设定值
@@ -537,6 +541,8 @@ void SENSORCheck() {
     limit = POWER_LIMIT_20;
     if (VoltageValue < 3) {
       limit = POWER_LIMIT_15;
+    } else if (VoltageValue == 3) {
+      limit = POWER_LIMIT_20_2;
     }
     ledcWrite(CONTROL_CHANNEL,
               constrain(HEATER_PWM, 0,
@@ -1625,7 +1631,7 @@ void heatWithLimit() {
   if (VoltageValue < 3) {
     limit = POWER_LIMIT_15;
   } else if (VoltageValue == 3) {
-    limit = POWER_LIMIT_20;
+    limit = POWER_LIMIT_20_2;
   }
   ledcWrite(
       CONTROL_CHANNEL,
