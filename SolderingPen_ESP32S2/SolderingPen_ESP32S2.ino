@@ -159,10 +159,6 @@ void setup() {
   }
   getEEPROM();
 
-  // EEPROM bounds validation safeguard
-  if (NumberOfTips == 0 || NumberOfTips > TIPMAX) NumberOfTips = 1;
-  if (CurrentTip >= NumberOfTips) CurrentTip = 0;
-
   pinMode(PD_CFG_0, OUTPUT);
   pinMode(PD_CFG_1, OUTPUT);
   pinMode(PD_CFG_2, OUTPUT);
@@ -178,7 +174,7 @@ void setup() {
         QC.set12V();
       } break;
       case 2: {
-        QC.set15V(); // FIX: Corrected from set12V() to set15V()
+        QC.set15V();
       } break;
       case 3: {
         QC.set20V();
@@ -389,7 +385,8 @@ void SENSORCheck() {
     SensorCounter = 0;
   }
 
-  if (!inLockMode) {
+  // FIX: Only restore heater if iron is actively heating (not locked, off, or sleeping)
+  if (!inLockMode && !inOffMode && !inSleepMode) {
     limit = getPowerLimit();
     ledcWrite(CONTROL_CHANNEL, constrain(HEATER_PWM, 0, limit));
   }
@@ -424,14 +421,23 @@ void SENSORCheck() {
 }
 
 void calculateTemp() {
-  if (RawTemp < 200)
+  if (RawTemp < 200) {
     CurrentTemp = map(RawTemp, 0, 200, 15, CalTemp[CurrentTip][0]);
-  else if (RawTemp < 280)
+  } else if (RawTemp < 280) {
     CurrentTemp =
         map(RawTemp, 200, 280, CalTemp[CurrentTip][0], CalTemp[CurrentTip][1]);
-  else
+  } else if (RawTemp <= 360) {
     CurrentTemp =
         map(RawTemp, 280, 360, CalTemp[CurrentTip][1], CalTemp[CurrentTip][2]);
+  } else {
+    // FIX: Handle RawTemp > 360 safely
+    if (RawTemp >= 950) {
+      CurrentTemp = 999;  // Disconnected tip / ADC open circuit saturation
+    } else {
+      CurrentTemp = map(RawTemp, 280, 360, CalTemp[CurrentTip][1], CalTemp[CurrentTip][2]);
+      if (CurrentTemp > 480) CurrentTemp = 480; // Cap legitimate high temp to prevent false tip error
+    }
+  }
 }
 
 void Thermostat() {
@@ -493,7 +499,7 @@ void MainScreen() {
   u8g2.firstPage();
   do {
     u8g2.setFont(PTS200_16);
-    if (language != 2) { // FIX: English uses PTS200_16; Chinese uses unifont fallback if needed
+    if (language != 2) {
       u8g2.setFont(u8g2_font_unifont_t_chinese3);
     }
     u8g2.setFontPosTop();
@@ -506,8 +512,7 @@ void MainScreen() {
     if (language != 2) {
       u8g2.setFont(u8g2_font_unifont_t_chinese3);
     }
-    
-    // FIX: Dynamic right-alignment to fix "ERRO" text clipping bug
+
     const char *status_str = txt_hold[language];
     if (ShowTemp > 500)
       status_str = txt_error[language];
@@ -573,7 +578,7 @@ void SetupScreen() {
     selection = MenuScreen(SetupItems, sizeof(SetupItems), selection);
     switch (selection) {
       case 0: {
-        TipScreen(); // FIX: Removed repeat = false to retain menu state after exiting TipScreen
+        TipScreen();
       } break;
       case 1: {
         TempScreen();
@@ -788,7 +793,7 @@ uint8_t MenuScreen(const char *Items[][language_types], uint8_t numberOfItems,
 
 void MessageScreen(const char *Items[][language_types], uint8_t numberOfItems) {
   numberOfItems = numberOfItems / language_types;
-  numberOfItems >>= 2; // FIX: Prevent array index out-of-bounds crash
+  numberOfItems >>= 2;
   bool lastbutton = (!digitalRead(BUTTON_PIN));
   u8g2.firstPage();
   do {
@@ -918,6 +923,14 @@ void ChangeTipScreen() {
 }
 
 void CalibrationScreen() {
+  // FIX: Reset operating mode flags before calibration to prevent sleep/off timeouts
+  inLockMode = false;
+  inSleepMode = false;
+  inOffMode = false;
+  inBoostMode = false;
+  handleMoved = true;
+  sleepmillis = millis();
+
   uint16_t CalTempNew[4];
   uint16_t tempSetTemp = SetTemp;
   for (uint8_t CalStep = 0; CalStep < 3; CalStep++) {
