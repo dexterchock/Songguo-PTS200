@@ -182,9 +182,15 @@ bool read_EEPROM()
   CurrentTip = EEPROM.readUChar(ADDR_CURRENT_TIP);
   NumberOfTips = EEPROM.readUChar(ADDR_NUMBER_OF_TIPS);
 
-  // FIX: Validate bounds to prevent buffer overflow and RAM corruption
-  if (NumberOfTips == 0 || NumberOfTips > TIPMAX) NumberOfTips = 1;
-  if (CurrentTip >= NumberOfTips) CurrentTip = 0;
+  bool dirty = false;
+
+  // FIX: Comprehensive EEPROM bounds validation and auto-repair trigger
+  if (NumberOfTips == 0 || NumberOfTips > TIPMAX) { NumberOfTips = 1; dirty = true; }
+  if (CurrentTip >= NumberOfTips) { CurrentTip = 0; dirty = true; }
+  if (VoltageValue > 4) { VoltageValue = VOLTAGE_VALUE; dirty = true; }
+  if (language >= language_types) { language = DEFAULT_LANGUAGE; dirty = true; }
+  if (hand_side > 1) { hand_side = DEFAULT_HAND_SIDE; dirty = true; }
+  if (MainScrType > 1) { MainScrType = MAINSCREEN; dirty = true; }
 
   for (uint8_t i = 0; i < NumberOfTips; i++)
   {
@@ -197,6 +203,11 @@ bool read_EEPROM()
 
   language = EEPROM.readUChar(ADDR_LANGUAGE);
   hand_side = EEPROM.readUChar(ADDR_HAND_SIDE);
+
+  // Auto-repair EEPROM if corrupted values were detected and sanitized
+  if (dirty) {
+    update_EEPROM();
+  }
 
   return true;
 }
