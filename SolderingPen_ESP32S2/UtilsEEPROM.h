@@ -2,6 +2,7 @@
 #define UTILS_EEPROM_H
 
 #include <EEPROM.h>
+#include <string.h>
 
 #define ADDR_SYSTEM_INIT_FLAG (0)
 #define ADDR_DEFAULT_TEMP (ADDR_SYSTEM_INIT_FLAG + 4)
@@ -73,6 +74,9 @@ bool write_default_EEPROM()
   CalTemp[0][1] = TEMP280;
   CalTemp[0][2] = TEMP360;
   CalTemp[0][3] = TEMPCHP;
+
+  strncpy(TipName[0], TIPNAME, TIPNAMELENGTH);
+  TipName[0][TIPNAMELENGTH - 1] = '\0';
 
   for (uint8_t i = 0; i < 1; i++)
   {
@@ -170,6 +174,8 @@ bool read_EEPROM()
     }
   }
 
+  bool dirty = false;
+
   DefaultTemp = EEPROM.readUShort(ADDR_DEFAULT_TEMP);
   SleepTemp = EEPROM.readUShort(ADDR_SLEEP_TEMP);
   BoostTemp = EEPROM.readUChar(ADDR_BOOST_TEMP);
@@ -177,19 +183,24 @@ bool read_EEPROM()
   time2off = EEPROM.readUChar(ADDR_TIME_2_OFF);
   timeOfBoost = EEPROM.readUChar(ADDR_TIME_OF_BOOST);
   MainScrType = EEPROM.readUChar(ADDR_MAIN_SCREEN);
-  PIDenable = EEPROM.readBool(ADDR_PID_ENABLE);
-  beepEnable = EEPROM.readBool(ADDR_BEEP_ENABLE);
   VoltageValue = EEPROM.readUChar(ADDR_VOLTAGE_VALUE);
-  QCEnable = EEPROM.readBool(ADDR_QC_ENABLE);
   WAKEUPthreshold = EEPROM.readUChar(ADDR_WAKEUP_THRESHOLD);
   CurrentTip = EEPROM.readUChar(ADDR_CURRENT_TIP);
   NumberOfTips = EEPROM.readUChar(ADDR_NUMBER_OF_TIPS);
   language = EEPROM.readUChar(ADDR_LANGUAGE);
   hand_side = EEPROM.readUChar(ADDR_HAND_SIDE);
 
-  bool dirty = false;
+  // Safely cast EEPROM boolean fields to prevent 0xFF corruption
+  uint8_t rawPID = EEPROM.readUChar(ADDR_PID_ENABLE);
+  if (rawPID <= 1) { PIDenable = rawPID; } else { PIDenable = PID_ENABLE; dirty = true; }
+  
+  uint8_t rawBeep = EEPROM.readUChar(ADDR_BEEP_ENABLE);
+  if (rawBeep <= 1) { beepEnable = rawBeep; } else { beepEnable = BEEP_ENABLE; dirty = true; }
+  
+  uint8_t rawQC = EEPROM.readUChar(ADDR_QC_ENABLE);
+  if (rawQC <= 1) { QCEnable = rawQC; } else { QCEnable = QC_ENABLE; dirty = true; }
 
-  // EEPROM temperature & timer bounds validation
+  // Temperature & timer parameter validation
   if (DefaultTemp < TEMP_MIN || DefaultTemp > TEMP_MAX) { DefaultTemp = TEMP_DEFAULT; dirty = true; }
   if (SleepTemp < 50 || SleepTemp > TEMP_MAX) { SleepTemp = TEMP_SLEEP; dirty = true; }
   if (BoostTemp < 10 || BoostTemp > 100) { BoostTemp = TEMP_BOOST; dirty = true; }
@@ -198,7 +209,7 @@ bool read_EEPROM()
   if (timeOfBoost > 180) { timeOfBoost = TIMEOFBOOST; dirty = true; }
   if (WAKEUPthreshold > 50) { WAKEUPthreshold = WAKEUP_THRESHOLD; dirty = true; }
 
-  // EEPROM system bounds validation
+  // System parameter validation
   if (NumberOfTips == 0 || NumberOfTips > TIPMAX) { NumberOfTips = 1; dirty = true; }
   if (CurrentTip >= NumberOfTips) { CurrentTip = 0; dirty = true; }
   if (VoltageValue > 4) { VoltageValue = VOLTAGE_VALUE; dirty = true; }
@@ -208,13 +219,17 @@ bool read_EEPROM()
 
   for (uint8_t i = 0; i < NumberOfTips; i++)
   {
-    EEPROM.readString(ADDR_TIP_NAME + i * TIPNAMELENGTH).toCharArray(TipName[i], sizeof(TipName[i]));
+    // Bounded string read to prevent EEPROM overrun
+    memset(TipName[i], 0, sizeof(TipName[i]));
+    String tipStr = EEPROM.readString(ADDR_TIP_NAME + i * TIPNAMELENGTH);
+    strncpy(TipName[i], tipStr.c_str(), sizeof(TipName[i]) - 1);
+
     for (uint8_t j = 0; j < CALNUM; j++)
     {
       CalTemp[i][j] = EEPROM.readUShort(ADDR_CAL_TEMP + i * 2 * CALNUM + j * 2);
     }
 
-    // EEPROM calibration array validation per tip
+    // Calibration array validation
     if (CalTemp[i][0] < 100 || CalTemp[i][0] > 500 ||
         CalTemp[i][1] < 100 || CalTemp[i][1] > 500 ||
         CalTemp[i][2] < 100 || CalTemp[i][2] > 500 ||
@@ -228,7 +243,7 @@ bool read_EEPROM()
     }
   }
 
-  // Auto-repair EEPROM if corrupted values were detected
+  // Repair EEPROM if invalid values detected
   if (dirty) {
     if (!update_EEPROM()) {
       Serial.println("EEPROM auto-repair failed");
