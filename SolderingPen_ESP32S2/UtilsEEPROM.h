@@ -28,8 +28,6 @@
 
 #define ADDR_EEPROM_SIZE (ADDR_HAND_SIDE + 1)
 
-extern bool system_init_flag;
-
 extern uint16_t DefaultTemp;
 extern uint16_t SleepTemp;
 extern uint8_t BoostTemp;
@@ -190,7 +188,6 @@ bool read_EEPROM()
   language = EEPROM.readUChar(ADDR_LANGUAGE);
   hand_side = EEPROM.readUChar(ADDR_HAND_SIDE);
 
-  // Safely cast EEPROM boolean fields to prevent 0xFF corruption
   uint8_t rawPID = EEPROM.readUChar(ADDR_PID_ENABLE);
   if (rawPID <= 1) { PIDenable = rawPID; } else { PIDenable = PID_ENABLE; dirty = true; }
   
@@ -200,7 +197,6 @@ bool read_EEPROM()
   uint8_t rawQC = EEPROM.readUChar(ADDR_QC_ENABLE);
   if (rawQC <= 1) { QCEnable = rawQC; } else { QCEnable = QC_ENABLE; dirty = true; }
 
-  // Temperature & timer parameter validation
   if (DefaultTemp < TEMP_MIN || DefaultTemp > TEMP_MAX) { DefaultTemp = TEMP_DEFAULT; dirty = true; }
   if (SleepTemp < 50 || SleepTemp > TEMP_MAX) { SleepTemp = TEMP_SLEEP; dirty = true; }
   if (BoostTemp < 10 || BoostTemp > 100) { BoostTemp = TEMP_BOOST; dirty = true; }
@@ -209,7 +205,6 @@ bool read_EEPROM()
   if (timeOfBoost > 180) { timeOfBoost = TIMEOFBOOST; dirty = true; }
   if (WAKEUPthreshold > 50) { WAKEUPthreshold = WAKEUP_THRESHOLD; dirty = true; }
 
-  // System parameter validation
   if (NumberOfTips == 0 || NumberOfTips > TIPMAX) { NumberOfTips = 1; dirty = true; }
   if (CurrentTip >= NumberOfTips) { CurrentTip = 0; dirty = true; }
   if (VoltageValue > 4) { VoltageValue = VOLTAGE_VALUE; dirty = true; }
@@ -219,17 +214,15 @@ bool read_EEPROM()
 
   for (uint8_t i = 0; i < NumberOfTips; i++)
   {
-    // Bounded string read to prevent EEPROM overrun
     memset(TipName[i], 0, sizeof(TipName[i]));
-    String tipStr = EEPROM.readString(ADDR_TIP_NAME + i * TIPNAMELENGTH);
-    strncpy(TipName[i], tipStr.c_str(), sizeof(TipName[i]) - 1);
+    EEPROM.readBytes(ADDR_TIP_NAME + i * TIPNAMELENGTH, TipName[i], TIPNAMELENGTH - 1);
+    TipName[i][TIPNAMELENGTH - 1] = '\0';
 
     for (uint8_t j = 0; j < CALNUM; j++)
     {
       CalTemp[i][j] = EEPROM.readUShort(ADDR_CAL_TEMP + i * 2 * CALNUM + j * 2);
     }
 
-    // Calibration array validation
     if (CalTemp[i][0] < 100 || CalTemp[i][0] > 500 ||
         CalTemp[i][1] < 100 || CalTemp[i][1] > 500 ||
         CalTemp[i][2] < 100 || CalTemp[i][2] > 500 ||
@@ -243,7 +236,6 @@ bool read_EEPROM()
     }
   }
 
-  // Repair EEPROM if invalid values detected
   if (dirty) {
     if (!update_EEPROM()) {
       Serial.println("EEPROM auto-repair failed");
