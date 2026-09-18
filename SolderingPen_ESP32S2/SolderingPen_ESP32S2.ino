@@ -1013,7 +1013,7 @@ uint16_t denoiseAnalog() {
   int resultArray[8];
   for (uint8_t i = 0; i < 8; i++) {
     float raw_adc = adc_sensor.readMiliVolts();
-    resultArray[i] = constrain(0.4432 * raw_adc + 6.3959, 20, 1000);
+    resultArray[i] = constrain(0.5378 * raw_adc + 6.3959, 20, 1000);
   }
   for (uint8_t i = 0; i < 8; i++) {
     for (uint8_t j = i + 1; j < 8; j++) {
