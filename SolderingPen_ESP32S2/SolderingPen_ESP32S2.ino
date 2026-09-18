@@ -1131,11 +1131,11 @@ static void usbEventCallback(void *arg, esp_event_base_t event_base, int32_t eve
     }
   } else if (event_base == ARDUINO_FIRMWARE_MSC_EVENTS) {
     switch (event_id) {
-      case ARDUINO_FIRMWARE_MSC_START_EVENT: u8g2.clearBuffer(); u8g2.setFont(u8g2_font_ncenB08_tr); u8g2.drawStr(0, 10, "MSC Update Start"); u8g2.sendBuffer(); break;
+      case ARDUINO_FIRMWARE_MSC_START_EVENT: u8g2.clearBuffer(); u8g2.setFont(u8g2_font_ncenB08_tr); u8g2.drawStr(0, 10, "MSC Start"); u8g2.sendBuffer(); break;
       case ARDUINO_FIRMWARE_MSC_WRITE_EVENT: u8g2.clearBuffer(); u8g2.setFont(u8g2_font_ncenB08_tr); u8g2.drawStr(0, 10, "MSC Updating"); u8g2.sendBuffer(); break;
-      case ARDUINO_FIRMWARE_MSC_END_EVENT: u8g2.clearBuffer(); u8g2.setFont(u8g2_font_ncenB08_tr); u8g2.drawStr(0, 10, "MSC Update End"); u8g2.sendBuffer(); break;
-      case ARDUINO_FIRMWARE_MSC_ERROR_EVENT: u8g2.clearBuffer(); u8g2.setFont(u8g2_font_ncenB08_tr); u8g2.drawStr(0, 10, "MSC Update ERROR!"); u8g2.sendBuffer(); break;
-      case ARDUINO_FIRMWARE_MSC_POWER_EVENT: u8g2.clearBuffer(); u8g2.setFont(u8g2_font_ncenB08_tr); u8g2.drawStr(0, 10, "MSC Update Power"); u8g2.sendBuffer(); break;
+      case ARDUINO_FIRMWARE_MSC_END_EVENT: u8g2.clearBuffer(); u8g2.setFont(u8g2_font_ncenB08_tr); u8g2.drawStr(0, 10, "MSC End"); u8g2.sendBuffer(); break;
+      case ARDUINO_FIRMWARE_MSC_ERROR_EVENT: u8g2.clearBuffer(); u8g2.setFont(u8g2_font_ncenB08_tr); u8g2.drawStr(0, 10, "MSC ERROR!"); u8g2.sendBuffer(); break;
+      case ARDUINO_FIRMWARE_MSC_POWER_EVENT: u8g2.clearBuffer(); u8g2.setFont(u8g2_font_ncenB08_tr); u8g2.drawStr(0, 10, "MSC Power"); u8g2.sendBuffer(); break;
       default: break;
     }
   }
