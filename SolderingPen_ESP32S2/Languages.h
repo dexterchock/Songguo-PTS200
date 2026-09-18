@@ -15,7 +15,7 @@ const char *SetupItems[][language_types] = {
   {"Voltage"},
   {"QC3.0"},
   {"Buzzer"},
-  {"Restore Config"},
+  {"Reset Config"},
   {"Update FW"},
   {"L/R Hand"},
   {"Back"}
@@ -61,7 +61,7 @@ const char *StoreItems[][language_types] = {
 };
 
 const char *DefaultItems[][language_types] = {
-  {"Restore Config?"},
+  {"Reset Config?"},
   {"No"},
   {"Yes"}
 };
@@ -153,12 +153,12 @@ const char *txt_temp[] = {"Temp: "};
 const char *txt_voltage[] = {"Voltage: "};
 const char *txt_Version[] = {"Ver: "};
 const char *txt_select_tip[] = {"Select Tip:"};
-const char *txt_calibrate[] = {"Calibrate Tip:"};
+const char *txt_calibrate[] = {"Calibrate:"};
 const char *txt_step[] = {"Step "};
-const char *txt_set_measured[] = {"Set measured temp:"};
+const char *txt_set_measured[] = {"Set Measured:"};
 const char *txt_s_temp[] = {"Temp: "};
 const char *txt_temp_2[] = {"ADC: "};
 const char *txt_wait_pls[] = {"Please wait..."};
-const char *txt_enter_tip_name[] = {"Enter tip name:"};
+const char *txt_enter_tip_name[] = {"Enter Name:"};
 
 #endif
