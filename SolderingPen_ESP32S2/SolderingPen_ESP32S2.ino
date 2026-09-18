@@ -487,8 +487,6 @@ void MainScreen() {
   u8g2.firstPage();
   do {
     u8g2.setFont(PTS200_16);
-    if (language != 2) u8g2.setFont(u8g2_font_unifont_t_chinese3);
-    
     u8g2.setFontPosTop();
     u8g2.drawUTF8(0, 0 + SCREEN_OFFSET, txt_set_temp[language]);
     u8g2.setCursor(40, 0 + SCREEN_OFFSET);
@@ -496,7 +494,6 @@ void MainScreen() {
     u8g2.print(Setpoint, 0);
 
     u8g2.setFont(PTS200_16);
-    if (language != 2) u8g2.setFont(u8g2_font_unifont_t_chinese3);
 
     const char *status_str = txt_hold[language];
     if (ShowTemp >= 500) status_str = txt_error[language];
@@ -597,8 +594,7 @@ void SetupScreen() {
         } while (digitalRead(BUTTON_PIN) || lastbutton);
         MSC_Update.end();
       } break;
-      case 10: language = MenuScreen(LanguagesItems, sizeof(LanguagesItems), language); repeat = false; break;
-      case 11: 
+      case 10: 
         hand_side = (hand_side == 0) ? 1 : 0;
         u8g2.setDisplayRotation(hand_side ? U8G2_R3 : U8G2_R1);
         repeat = false; 
@@ -683,9 +679,8 @@ void TimerScreen() {
 }
 
 uint8_t MenuScreen(const char *Items[][language_types], uint8_t numberOfItems, uint8_t selected) {
-  bool isTipScreen = ((strcmp(Items[0][language], "烙铁头:") == 0) ||
-                      (strcmp(Items[0][language], "Tip:") == 0) ||
-                      (strcmp(Items[0][language], "烙鐵頭:") == 0));
+  bool isTipScreen = ((strcmp(Items[0][language], "Tip:") == 0) ||
+                      (strcmp(Items[0][language], "Tip") == 0));
   uint8_t lastselected = selected;
   int8_t arrow = 0;
   if (selected) arrow = 1;
@@ -708,7 +703,6 @@ uint8_t MenuScreen(const char *Items[][language_types], uint8_t numberOfItems, u
     u8g2.firstPage();
     do {
       u8g2.setFont(PTS200_16);
-      if (language != 2) u8g2.setFont(u8g2_font_unifont_t_chinese3);
       u8g2.setFontPosTop();
       u8g2.drawUTF8(0, 0 + SCREEN_OFFSET, Items[0][language]);
       if (isTipScreen) u8g2.drawUTF8(54, 0 + SCREEN_OFFSET, TipName[CurrentTip]);
@@ -736,7 +730,6 @@ void MessageScreen(const char *Items[][language_types], uint8_t numberOfItems) {
   u8g2.firstPage();
   do {
     u8g2.setFont(PTS200_16);
-    if (language != 2) u8g2.setFont(u8g2_font_unifont_t_chinese3);
     u8g2.setFontPosTop();
     for (uint8_t i = 0; i < numberOfItems; i++)
       u8g2.drawUTF8(0, i * 16, Items[i][language]);
@@ -758,7 +751,6 @@ uint16_t InputScreen(const char *Items[][language_types]) {
     u8g2.firstPage();
     do {
       u8g2.setFont(PTS200_16);
-      if (language != 2) u8g2.setFont(u8g2_font_unifont_t_chinese3);
       u8g2.setFontPosTop();
       u8g2.drawUTF8(0, 0 + SCREEN_OFFSET, Items[0][language]);
       u8g2.setCursor(0, 32);
@@ -790,7 +782,6 @@ void InfoScreen() {
     u8g2.firstPage();
     do {
       u8g2.setFont(PTS200_16);
-      if (language != 2) u8g2.setFont(u8g2_font_unifont_t_chinese3);
       u8g2.setFontPosTop();
       u8g2.setCursor(0, 0 + SCREEN_OFFSET);
       u8g2.print(txt_temp[language]);
@@ -828,7 +819,6 @@ void ChangeTipScreen() {
     u8g2.firstPage();
     do {
       u8g2.setFont(PTS200_16);
-      if (language != 2) u8g2.setFont(u8g2_font_unifont_t_chinese3);
       u8g2.setFontPosTop();
       u8g2.drawUTF8(0, 0 + SCREEN_OFFSET, txt_select_tip[language]);
       u8g2.drawUTF8(0, 16 * (arrow + 1) + SCREEN_OFFSET, ">");
@@ -898,7 +888,6 @@ void CalibrationScreen() {
       u8g2.firstPage();
       do {
         u8g2.setFont(PTS200_16);
-        if (language != 2) u8g2.setFont(u8g2_font_unifont_t_chinese3);
         u8g2.setFontPosTop();
         u8g2.drawUTF8(0, 0 + SCREEN_OFFSET, txt_calibrate[language]);
         u8g2.setCursor(0, 16 + SCREEN_OFFSET);
@@ -971,7 +960,6 @@ void InputNameScreen() {
       u8g2.firstPage();
       do {
         u8g2.setFont(PTS200_16);
-        if (language != 2) u8g2.setFont(u8g2_font_unifont_t_chinese3);
         u8g2.setFontPosTop();
         u8g2.drawUTF8(0, 0 + SCREEN_OFFSET, txt_enter_tip_name[language]);
         u8g2.setCursor(12 * digit, 48 + SCREEN_OFFSET);
