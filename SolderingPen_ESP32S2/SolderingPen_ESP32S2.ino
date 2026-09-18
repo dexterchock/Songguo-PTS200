@@ -170,7 +170,7 @@ void setup() {
   if (QCEnable) {
     QC.begin();
     delay(100);
-    // Preserved original QC3Control API mapping
+    // Preserved exact original QC mapping
     switch (VoltageValue) {
       case 0: QC.set9V(); break;
       case 1: QC.set12V(); break;
