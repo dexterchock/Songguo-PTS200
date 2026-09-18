@@ -439,10 +439,17 @@ void Thermostat() {
       ctrl.SetTunings(aggKp, aggKi, aggKd);
       
     limit = getPowerLimit();
-    ctrl.SetOutputLimits(0, limit);
+    // Synchronized inverted P-MOSFET output limits (HEATER_PWM = 255 - Output)
+    ctrl.SetOutputLimits(255 - limit, 255);
     ctrl.Compute();
   } else {
-    if ((CurrentTemp + 0.5) < Setpoint) Output = 255; else Output = 0;
+    // Restored original Songguo PTS200 direct control polarity:
+    // Cold: Output = 0   => HEATER_PWM = 255 - 0 = 255 (Heater ON)
+    // Hot:  Output = 255 => HEATER_PWM = 255 - 255 = 0 (Heater OFF)
+    if ((CurrentTemp + 0.5) < Setpoint)
+      Output = 0;
+    else
+      Output = 255;
   }
   
   limit = getPowerLimit();
