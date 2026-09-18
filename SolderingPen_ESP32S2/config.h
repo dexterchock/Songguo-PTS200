@@ -14,7 +14,6 @@
 // Type of OLED Controller
 // #define SSD1306
 #define SH1107
-//typedef u8g2_uint_t u8g_uint_t;
 #define SCREEN_OFFSET     2
 
 // Rotary Encoder Type
@@ -45,9 +44,9 @@
 #define TEMP_SLEEP        150   // sleep temp
 #define TEMP_BOOST        50    // boost step
 #define TEMP_STEP         10    // rotary step
-#define POWER_LIMIT_15    170   // power limit 15V
-#define POWER_LIMIT_20    255   // power limit 20V
-#define POWER_LIMIT_20_2  127   // secondary power limit 20V
+#define POWER_LIMIT_15    170   // power limit
+#define POWER_LIMIT_20    255   // power limit
+#define POWER_LIMIT_20_2  127   // power limit
 
 // Default Tip Calibration Points
 #define TEMP200           200   // temp at ADC = 200 
