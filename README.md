@@ -82,14 +82,6 @@ pio run -t upload
 
 4. Compile and flash `SolderingPen_ESP32S2/SolderingPen_ESP32S2.ino`.
 
-### Option 3: MSC Drag-and-Drop Update
-
-1. Power on the PTS200 smart iron.
-2. Enter the **Setup Menu** -> **Update FW**.
-3. Connect the device to your computer via USB-C.
-4. Drag and drop the compiled `.bin` firmware file into the virtual USB drive that appears.
-
----
 
 ## 📌 Credits & Acknowledgments
 
