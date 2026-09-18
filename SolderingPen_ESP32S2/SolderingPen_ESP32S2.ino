@@ -4,7 +4,6 @@
 //
 #include <Button2.h>
 #include <QC3Control.h>
-#include <esp_task_wdt.h> // Hardware Watchdog to prevent MCU lockup runaway
 
 //
 #include "FirmwareMSC.h"
@@ -82,7 +81,6 @@ bool inBoostMode = false;
 bool isWorky = true;
 bool beepIfWorky = true;
 bool TipIsPresent = true;
-bool accel_ok = false;
 
 // Timing variables
 uint32_t sleepmillis;
@@ -121,19 +119,17 @@ uint8_t getPowerLimit() {
   return POWER_LIMIT_20;
 }
 
-// Float map to prevent precision truncation during temp calculations
+// Float map to preserve fractional accuracy during ADC to temperature conversion
 float fmap(float x, float in_min, float in_max, float out_min, float out_max) {
   return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
 void setup() {
-  // 1. Hardware Watchdog initialized to 3 seconds. Forces reset on software lockups.
-  esp_task_wdt_init(3, true); 
-  esp_task_wdt_add(NULL);
-
+  // Early heater OFF initialization
   pinMode(CONTROL_PIN, OUTPUT);
   digitalWrite(CONTROL_PIN, HEATER_OFF);
 
+  // Known-safe PD pin initialization (000 = 9V initial request)
   pinMode(PD_CFG_0, OUTPUT);
   pinMode(PD_CFG_1, OUTPUT);
   pinMode(PD_CFG_2, OUTPUT);
@@ -174,10 +170,11 @@ void setup() {
   if (QCEnable) {
     QC.begin();
     delay(100);
+    // Preserved original QC3Control API mapping
     switch (VoltageValue) {
       case 0: QC.set9V(); break;
       case 1: QC.set12V(); break;
-      case 2: QC.set15V(); break;
+      case 2: QC.set12V(); break;
       case 3: QC.set20V(); break;
       case 4: QC.set20V(); break;
       default: break;
@@ -194,9 +191,8 @@ void setup() {
   calculateTemp();
   ShowTemp = CurrentTemp;
 
-  limit = getPowerLimit();
-  ctrl.SetOutputLimits(0, limit);
-  ctrl.SetMode(MANUAL); // Start off, let Thermostat() enable
+  ctrl.SetOutputLimits(0, 255);
+  ctrl.SetMode(AUTOMATIC);
 
   a0 = 0;
   b0 = 0;
@@ -210,10 +206,8 @@ void setup() {
   Wire.begin();
   Wire.setClock(100000);
   if (accel.begin() == false) {
+    delay(500);
     Serial.println("Accelerometer not detected.");
-    accel_ok = false;
-  } else {
-    accel_ok = true;
   }
 
   ChipTemp = getChipTemp();
@@ -228,7 +222,6 @@ void setup() {
 int SENSORCheckTimes = 0;
 
 void loop() {
-  esp_task_wdt_reset(); // Feed WDT
   ROTARYCheck();
   SLEEPCheck();
 
@@ -244,6 +237,7 @@ void loop() {
 
 void ROTARYCheck() {
   SetTemp = getRotary();
+
   uint8_t c = digitalRead(BUTTON_PIN);
   if (!c && c0) {
     delay(10);
@@ -264,7 +258,7 @@ void ROTARYCheck() {
           buttonmillis = millis();
           while ((digitalRead(BUTTON_PIN)) && ((millis() - buttonmillis) < 200)) delay(10);
           
-          if ((millis() - buttonmillis) >= 200) { 
+          if ((millis() - buttonmillis) >= 200) {  // single click
             if (inOffMode) {
               inOffMode = false;
               handleMoved = true;
@@ -273,7 +267,7 @@ void ROTARYCheck() {
               if (inBoostMode) boostmillis = millis();
               handleMoved = true;
             }
-          } else { 
+          } else {  // double click
             inOffMode = true;
           }
         }
@@ -294,7 +288,7 @@ void ROTARYCheck() {
 
 void SLEEPCheck() {
   if (inLockMode) return;
-  
+
   if (handleMoved) {
     u8g2.setPowerSave(0);
     if (inSleepMode) {
@@ -318,7 +312,7 @@ void SLEEPCheck() {
 }
 
 void SENSORCheck() {
-  if (accel_ok && accel.available()) {
+  if (accel.available()) {
     accels[accelIndex][0] = accel.getRawX() + 32768;
     accels[accelIndex][1] = accel.getRawY() + 32768;
     accels[accelIndex][2] = accel.getRawZ() + 32768;
@@ -351,6 +345,7 @@ void SENSORCheck() {
     }
   }
 
+  // Shut heater off while performing ADC reading
   ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
   
   if (VoltageValue == 3) delayMicroseconds(TIME2SETTLE_20V);
@@ -363,8 +358,7 @@ void SENSORCheck() {
     SensorCounter = 0;
   }
 
-  // Cover both dead short to ground (low-side op-amp fail) and open circuit (high-side fail)
-  if (temp >= 950.0 || temp <= 30.0) {
+  if (temp >= 950.0) {
     RawTemp = temp;
     CurrentTemp = 999.0;
   } else {
@@ -395,7 +389,7 @@ void SENSORCheck() {
     beep();
     TipIsPresent = true;
     ChangeTipScreen();
-    if(!update_EEPROM()) Serial.println("EEPROM update failed (Tip Change)");
+    if(!update_EEPROM()) Serial.println("EEPROM update failed on tip change");
     handleMoved = true;
     RawTemp = denoiseAnalog();
     c0 = LOW;
@@ -423,15 +417,10 @@ void calculateTemp() {
 
 void Thermostat() {
   if (!isfinite(CurrentTemp) || CurrentTemp >= 500.0 || inOffMode || inLockMode) {
-    ctrl.SetMode(MANUAL); // Purges internal integral windup on fault/off
     Setpoint = 0;
     Output = 0;
     ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
     return;
-  }
-
-  if (ctrl.GetMode() != AUTOMATIC) {
-    ctrl.SetMode(AUTOMATIC);
   }
 
   if (inSleepMode)
@@ -450,7 +439,7 @@ void Thermostat() {
       ctrl.SetTunings(aggKp, aggKi, aggKd);
       
     limit = getPowerLimit();
-    ctrl.SetOutputLimits(0, limit); // Sync limits to prevent windup against hardware constraints
+    ctrl.SetOutputLimits(0, limit);
     ctrl.Compute();
   } else {
     if ((CurrentTemp + 0.5) < Setpoint) Output = 255; else Output = 0;
@@ -545,7 +534,6 @@ void MainScreen() {
 }
 
 void SetupScreen() {
-  esp_task_wdt_reset(); // Feed WDT inside blocking menu
   ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
   beep();
   uint16_t SaveSetTemp = SetTemp;
@@ -554,7 +542,6 @@ void SetupScreen() {
   bool eepromOperationFailed = false;
 
   while (repeat) {
-    esp_task_wdt_reset();
     selection = MenuScreen(SetupItems, sizeof(SetupItems), selection);
     switch (selection) {
       case 0: TipScreen(); break;
@@ -565,8 +552,6 @@ void SetupScreen() {
       case 5:
         VoltageValue = MenuScreen(VoltageItems, sizeof(VoltageItems), VoltageValue);
         PD_Update();
-        delay(200); // Allow PD negotiation to settle
-        Vin = getVIN();
         break;
       case 6: QCEnable = MenuScreen(QCItems, sizeof(QCItems), QCEnable); break;
       case 7: beepEnable = MenuScreen(BuzzerItems, sizeof(BuzzerItems), beepEnable); break;
@@ -596,7 +581,6 @@ void SetupScreen() {
         u8g2.sendBuffer();
         delay(1000);
         do {
-          esp_task_wdt_reset();
           MSC_Update.onEvent(usbEventCallback);
           MSC_Update.begin();
           if (lastbutton && digitalRead(BUTTON_PIN)) {
@@ -629,7 +613,6 @@ void TipScreen() {
   uint8_t selection = 0;
   bool repeat = true;
   while (repeat) {
-    esp_task_wdt_reset();
     selection = MenuScreen(TipItems, sizeof(TipItems), selection);
     switch (selection) {
       case 0: ChangeTipScreen(); break;
@@ -646,7 +629,6 @@ void TempScreen() {
   uint8_t selection = 0;
   bool repeat = true;
   while (repeat) {
-    esp_task_wdt_reset();
     selection = MenuScreen(TempItems, sizeof(TempItems), selection);
     switch (selection) {
       case 0:
@@ -670,7 +652,6 @@ void TimerScreen() {
   uint8_t selection = 0;
   bool repeat = true;
   while (repeat) {
-    esp_task_wdt_reset();
     selection = MenuScreen(TimerItems, sizeof(TimerItems), selection);
     switch (selection) {
       case 0:
@@ -714,7 +695,6 @@ uint8_t MenuScreen(const char *Items[][language_types], uint8_t numberOfItems, u
 
   bool lastbutton = (!digitalRead(BUTTON_PIN));
   do {
-    esp_task_wdt_reset();
     selected = getRotary();
     arrow = constrain(arrow + selected - lastselected, 0, 2);
     lastselected = selected;
@@ -755,7 +735,6 @@ void MessageScreen(const char *Items[][language_types], uint8_t numberOfItems) {
       u8g2.drawUTF8(0, i * 16, Items[i][language]);
   } while (u8g2.nextPage());
   do {
-    esp_task_wdt_reset();
     if (lastbutton && digitalRead(BUTTON_PIN)) {
       delay(10);
       lastbutton = false;
@@ -768,7 +747,6 @@ uint16_t InputScreen(const char *Items[][language_types]) {
   uint16_t value;
   bool lastbutton = (!digitalRead(BUTTON_PIN));
   do {
-    esp_task_wdt_reset();
     value = getRotary();
     u8g2.firstPage();
     do {
@@ -799,7 +777,6 @@ uint16_t InputScreen(const char *Items[][language_types]) {
 void InfoScreen() {
   bool lastbutton = (!digitalRead(BUTTON_PIN));
   do {
-    esp_task_wdt_reset();
     Vin = getVIN();
     float fVin = (float)Vin / 1000;
     float fTmp = getChipTemp();
@@ -838,7 +815,6 @@ void ChangeTipScreen() {
   bool lastbutton = (!digitalRead(BUTTON_PIN));
 
   do {
-    esp_task_wdt_reset();
     selected = getRotary();
     arrow = constrain(arrow + selected - lastselected, 0, 2);
     lastselected = selected;
@@ -872,6 +848,7 @@ void CalibrationScreen() {
   bool savedBoostMode = inBoostMode;
   bool savedHandleMoved = handleMoved;
   bool savedBeepIfWorky = beepIfWorky;
+  bool savedTipIsPresent = TipIsPresent;
   uint32_t savedSleepMillis = sleepmillis;
   uint32_t savedBoostMillis = boostmillis;
 
@@ -891,7 +868,6 @@ void CalibrationScreen() {
     bool lastbutton = (!digitalRead(BUTTON_PIN));
 
     do {
-      esp_task_wdt_reset();
       SENSORCheck();
       Thermostat();
 
@@ -904,9 +880,10 @@ void CalibrationScreen() {
         inOffMode = savedOffMode;
         inBoostMode = savedBoostMode;
         handleMoved = savedHandleMoved;
+        beepIfWorky = savedBeepIfWorky;
+        TipIsPresent = savedTipIsPresent;
         sleepmillis = savedSleepMillis;
         boostmillis = savedBoostMillis;
-        beepIfWorky = savedBeepIfWorky;
         u8g2.setPowerSave(inOffMode ? 1 : 0);
         return;
       }
@@ -965,13 +942,14 @@ void CalibrationScreen() {
   inOffMode = savedOffMode;
   inBoostMode = savedBoostMode;
   handleMoved = savedHandleMoved;
+  beepIfWorky = savedBeepIfWorky;
+  TipIsPresent = savedTipIsPresent;
   sleepmillis = savedSleepMillis;
   boostmillis = savedBoostMillis;
-  beepIfWorky = savedBeepIfWorky;
 
   u8g2.setPowerSave(inOffMode ? 1 : 0);
 
-  if(!update_EEPROM()) Serial.println("EEPROM update failed (Calibration)");
+  if(!update_EEPROM()) Serial.println("EEPROM update failed on calibration finish");
 }
 
 void InputNameScreen() {
@@ -980,7 +958,6 @@ void InputNameScreen() {
     bool lastbutton = (!digitalRead(BUTTON_PIN));
     setRotary(31, 96, 1, 65);
     do {
-      esp_task_wdt_reset();
       value = getRotary();
       if (value == 31) { value = 95; setRotary(31, 96, 1, 95); }
       if (value == 96) { value = 32; setRotary(31, 96, 1, 32); }
@@ -1057,7 +1034,6 @@ uint16_t denoiseAnalog() {
 }
 
 double getChipTemp() {
-  if (!accel_ok) return 25.0; // Fallback if IMU init failed
 #if defined(MPU)
   mpu6050.update();
   return mpu6050.getTemp();
@@ -1069,7 +1045,6 @@ double getChipTemp() {
 }
 
 float getMPUTemp() {
-  if (!accel_ok) return 25.0; // Fallback if IMU init failed
 #if defined(MPU)
   mpu6050.update();
   return mpu6050.getTemp();
