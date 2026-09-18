@@ -348,7 +348,7 @@ void SENSORCheck() {
   // Shut heater off while performing ADC reading
   ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
   
-  if (VoltageValue == 3) delayMicroseconds(TIME2SETTLE_20V);
+  if (VoltageValue >= 3) delayMicroseconds(TIME2SETTLE_20V);
   else delayMicroseconds(TIME2SETTLE);
 
   double temp = denoiseAnalog();
@@ -920,7 +920,7 @@ void CalibrationScreen() {
   }
 
   ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
-  if (VoltageValue == 3) delayMicroseconds(TIME2SETTLE_20V);
+  if (VoltageValue >= 3) delayMicroseconds(TIME2SETTLE_20V);
   else delayMicroseconds(TIME2SETTLE);
   
   CalTempNew[3] = getChipTemp();
@@ -1108,7 +1108,7 @@ void PD_Update() {
     default: break;
   }
 
-  if (VoltageValue == 3) ledcSetup(CONTROL_CHANNEL, CONTROL_FREQ_20V, CONTROL_RES);
+  if (VoltageValue >= 3) ledcSetup(CONTROL_CHANNEL, CONTROL_FREQ_20V, CONTROL_RES);
   else ledcSetup(CONTROL_CHANNEL, CONTROL_FREQ, CONTROL_RES);
 
   ledcAttachPin(CONTROL_PIN, CONTROL_CHANNEL);
