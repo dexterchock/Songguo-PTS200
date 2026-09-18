@@ -73,8 +73,8 @@ const char *VoltageItems[][language_types] = {
   {"9V"},
   {"12V"},
   {"15V"},
-  {"20V (Max Power)"},
-  {"20V (Limited Power)"}
+  {"20V (3A)"},
+  {"20V (5A)"}
 };
 
 const char *QCItems[][language_types] = {
