@@ -11,29 +11,32 @@ const char *SetupItems[][language_types] = {
   {"Temp"},
   {"Timer"},
   {"Display"},
-  {"Information"},
+  {"Info"},
   {"Voltage"},
   {"QC3.0"},
   {"Buzzer"},
   {"Restore Config"},
-  {"Update Firmware"},
-  {"L/R Hand"}
+  {"Update FW"},
+  {"L/R Hand"},
+  {"Back"}
 };
 
 const char *TipItems[][language_types] = {
   {"Tip"},
   {"Select Tip"},
-  {"Calibrate Tip"},
+  {"Calibrate"},
   {"Edit Name"},
   {"Delete Tip"},
-  {"Add Tip"}
+  {"Add Tip"},
+  {"Back"}
 };
 
 const char *TempItems[][language_types] = {
   {"Temp"},
   {"Default Temp"},
   {"Sleep Temp"},
-  {"Boost Temp"}
+  {"Boost Temp"},
+  {"Back"}
 };
 
 const char *TimerItems[][language_types] = {
@@ -41,7 +44,8 @@ const char *TimerItems[][language_types] = {
   {"Sleep Timer"},
   {"Off Timer"},
   {"Boost Timer"},
-  {"Sensitivity"}
+  {"Sensitivity"},
+  {"Back"}
 };
 
 const char *MainScreenItems[][language_types] = {
