@@ -410,7 +410,6 @@ void calculateTemp() {
     } else {
       float slope = (float)(CalTemp[CurrentTip][2] - CalTemp[CurrentTip][1]) / (360.0f - 280.0f);
       CurrentTemp = CalTemp[CurrentTip][2] + slope * (RawTemp - 360.0f);
-      if (CurrentTemp > 480.0f) CurrentTemp = 480.0f;
     }
   }
 }
@@ -439,13 +438,9 @@ void Thermostat() {
       ctrl.SetTunings(aggKp, aggKi, aggKd);
       
     limit = getPowerLimit();
-    // Synchronized inverted P-MOSFET output limits (HEATER_PWM = 255 - Output)
     ctrl.SetOutputLimits(255 - limit, 255);
     ctrl.Compute();
   } else {
-    // Restored original Songguo PTS200 direct control polarity:
-    // Cold: Output = 0   => HEATER_PWM = 255 - 0 = 255 (Heater ON)
-    // Hot:  Output = 255 => HEATER_PWM = 255 - 255 = 0 (Heater OFF)
     if ((CurrentTemp + 0.5) < Setpoint)
       Output = 0;
     else
