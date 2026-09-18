@@ -597,7 +597,9 @@ void SetupScreen() {
       case 10: 
         hand_side = (hand_side == 0) ? 1 : 0;
         u8g2.setDisplayRotation(hand_side ? U8G2_R3 : U8G2_R1);
-        repeat = false; 
+        break;
+      case 11:
+        repeat = false;
         break;
       default: repeat = false; break;
     }
@@ -623,6 +625,7 @@ void TipScreen() {
       case 2: InputNameScreen(); break;
       case 3: DeleteTipScreen(); break;
       case 4: AddTipScreen(); break;
+      case 5: repeat = false; break;
       default: repeat = false; break;
     }
   }
@@ -646,6 +649,7 @@ void TempScreen() {
         setRotary(10, 100, TEMP_STEP, BoostTemp);
         BoostTemp = InputScreen(BoostTempItems);
         break;
+      case 3: repeat = false; break;
       default: repeat = false; break;
     }
   }
@@ -673,6 +677,7 @@ void TimerScreen() {
         setRotary(0, 50, 5, WAKEUPthreshold);
         WAKEUPthreshold = InputScreen(WAKEUPthresholdItems);
         break;
+      case 4: repeat = false; break;
       default: repeat = false; break;
     }
   }
