@@ -77,7 +77,6 @@ bool inBoostMode = false;
 bool isWorky = true;
 bool beepIfWorky = true;
 bool TipIsPresent = true;
-uint8_t tipDisconnectCount = 0;
 
 // Timing variables
 uint32_t sleepmillis;
@@ -159,7 +158,7 @@ void setup() {
   u8g2.enableUTF8Print();
   u8g2.setDisplayRotation(hand_side ? U8G2_R3 : U8G2_R1);
 
-  // 5. Clean, Minimal DEXTER Splash Screen (No lines, regular sans-serif)
+  // 5. Clean, Minimal DEXTER Splash Screen
   u8g2.firstPage();
   do {
     u8g2.setFont(u8g2_font_logisoso24_tr);
@@ -174,7 +173,7 @@ void setup() {
   adc_sensor.attach(SENSOR_PIN);
   adc_vin.attach(VIN_PIN);
 
-  // 7. Initiate USB-PD Handshake (Direct single request)
+  // 7. Initiate USB-PD Handshake (Direct request to saved VoltageValue)
   pinMode(PD_CFG_0, OUTPUT);
   pinMode(PD_CFG_1, OUTPUT);
   pinMode(PD_CFG_2, OUTPUT);
@@ -198,7 +197,7 @@ void setup() {
     Serial.println("Accelerometer not detected.");
   }
 
-  // 9. Splash screen hold time (allows charger to stabilize voltage at 20V)
+  // 9. Splash screen hold time (allows charger to stabilize voltage)
   delay(600);
 
   // 10. Measure true, settled supply voltage & tip temp
@@ -208,7 +207,7 @@ void setup() {
   calculateTemp();
   ShowTemp = CurrentTemp;
 
-  // 11. PID & Rotary Controls
+  // 11. Controls & Rotary
   ctrl.SetOutputLimits(0, 255);
   ctrl.SetMode(AUTOMATIC);
 
@@ -363,7 +362,7 @@ void SENSORCheck() {
   // Turn heater off during ADC sampling
   ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
   
-  // Unified 5ms settle delay: fully clears OpAmp input filter charge across all voltages
+  // Unified 5ms settle delay: completely discharges OpAmp filter
   delayMicroseconds(TIME2SETTLE);
 
   double temp = denoiseAnalog();
@@ -373,33 +372,13 @@ void SENSORCheck() {
     SensorCounter = 0;
   }
 
-  // Require 3 CONSECUTIVE readings >= 950 to declare tip unplugged
-  // (Prevents fast-ramp electrical transients from faking an open-circuit disconnect)
-  static uint8_t highAdcCount = 0;
-  if (temp >= 950.0) {
-    if (highAdcCount < 3) {
-      highAdcCount++;
-      // Transient spike ignored, let smoothie filter handle it
-    } else {
-      RawTemp = temp;
-      CurrentTemp = 999.0;
-    }
-  } else {
-    highAdcCount = 0;
-    RawTemp += (temp - RawTemp) * SMOOTHIE;
-    calculateTemp();
-  }
+  // Natural exponential smoothing (no artificial ADC gates)
+  RawTemp += (temp - RawTemp) * SMOOTHIE;
+  calculateTemp();
 
-  if (!isfinite(CurrentTemp) || CurrentTemp >= 500.0) {
-    ShowTemp = 999;
-    if (tipDisconnectCount < 5) tipDisconnectCount++;
-    else TipIsPresent = false;
-  } else {
-    tipDisconnectCount = 0;
-    if ((ShowTemp != Setpoint) || (abs(ShowTemp - CurrentTemp) > 5))
-      ShowTemp = CurrentTemp;
-    if (abs(ShowTemp - Setpoint) <= 1) ShowTemp = Setpoint;
-  }
+  if ((ShowTemp != Setpoint) || (abs(ShowTemp - CurrentTemp) > 5))
+    ShowTemp = CurrentTemp;
+  if (abs(ShowTemp - Setpoint) <= 1) ShowTemp = Setpoint;
 
   gap = abs(SetTemp - CurrentTemp);
   if (gap < 5) {
@@ -410,7 +389,8 @@ void SENSORCheck() {
     isWorky = false;
   }
 
-  // Only open tip selection menu if tip was genuinely missing and re-inserted
+  // Natural tip detection: when unplugged, RawTemp naturally climbs > 500
+  if (ShowTemp > 500) TipIsPresent = false;
   if (!TipIsPresent && (ShowTemp < 500)) {
     ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
     beep();
@@ -424,25 +404,21 @@ void SENSORCheck() {
   }
 }
 
+// Clean, natural continuous extrapolation (no artificial 950 cap)
 void calculateTemp() {
   if (RawTemp < 200) {
     CurrentTemp = fmap(RawTemp, 0, 200, 15, CalTemp[CurrentTip][0]);
   } else if (RawTemp < 280) {
     CurrentTemp = fmap(RawTemp, 200, 280, CalTemp[CurrentTip][0], CalTemp[CurrentTip][1]);
-  } else if (RawTemp <= 360) {
-    CurrentTemp = fmap(RawTemp, 280, 360, CalTemp[CurrentTip][1], CalTemp[CurrentTip][2]);
   } else {
-    if (RawTemp >= 950) {
-      CurrentTemp = 999; 
-    } else {
-      float slope = (float)(CalTemp[CurrentTip][2] - CalTemp[CurrentTip][1]) / (360.0f - 280.0f);
-      CurrentTemp = CalTemp[CurrentTip][2] + slope * (RawTemp - 360.0f);
-    }
+    // Extrapolates cleanly all the way up to 1000 when tip is unplugged
+    CurrentTemp = fmap(RawTemp, 280, 360, CalTemp[CurrentTip][1], CalTemp[CurrentTip][2]);
   }
 }
 
 void Thermostat() {
-  if (!isfinite(CurrentTemp) || CurrentTemp >= 500.0 || inOffMode || inLockMode) {
+  // If tip is removed (> 500) or locked/off, shut heater OFF immediately
+  if (CurrentTemp > 500.0 || inOffMode || inLockMode) {
     Setpoint = 0;
     Output = 0;
     ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
@@ -468,6 +444,7 @@ void Thermostat() {
     ctrl.SetOutputLimits(255 - limit, 255);
     ctrl.Compute();
   } else {
+    // Robust, zero-jitter direct control
     if ((CurrentTemp + 0.5) < Setpoint)
       Output = 0;
     else
@@ -475,15 +452,7 @@ void Thermostat() {
   }
   
   limit = getPowerLimit();
-
-  // Smooth power ramp from cold to 160°C to eliminate sharp inrush current spikes
-  if (CurrentTemp < 160.0) {
-    float ramp = 0.55f + 0.45f * (CurrentTemp / 160.0f); // Scales smoothly from 55% to 100%
-    uint8_t rampLimit = (uint8_t)(limit * ramp);
-    ledcWrite(CONTROL_CHANNEL, constrain((HEATER_PWM), 0, rampLimit));
-  } else {
-    ledcWrite(CONTROL_CHANNEL, constrain((HEATER_PWM), 0, limit));
-  }
+  ledcWrite(CONTROL_CHANNEL, constrain((HEATER_PWM), 0, limit));
 }
 
 void beep() {
@@ -527,7 +496,7 @@ void MainScreen() {
     u8g2.setFont(PTS200_16);
 
     const char *status_str = txt_hold[language];
-    if (ShowTemp >= 500) status_str = txt_error[language];
+    if (ShowTemp > 500) status_str = txt_error[language];
     else if (inOffMode || inLockMode) status_str = txt_off[language];
     else if (inSleepMode) status_str = txt_sleep[language];
     else if (inBoostMode) status_str = txt_boost[language];
@@ -558,12 +527,12 @@ void MainScreen() {
       u8g2.setFont(u8g2_font_freedoomr25_tn);
       u8g2.setFontPosTop();
       u8g2.setCursor(37, 18);
-      if (ShowTemp >= 500) u8g2.print(F("---")); else u8g2.printf("%03d", ShowTemp);
+      if (ShowTemp > 500) u8g2.print(F("---")); else u8g2.printf("%03d", ShowTemp);
     } else {
       u8g2.setFont(u8g2_font_fub42_tn);
       u8g2.setFontPosTop();
       u8g2.setCursor(15, 20);
-      if (ShowTemp >= 500) u8g2.print(F("---")); else u8g2.printf("%03d", ShowTemp);
+      if (ShowTemp > 500) u8g2.print(F("---")); else u8g2.printf("%03d", ShowTemp);
     }
   } while (u8g2.nextPage());
 }
@@ -595,7 +564,7 @@ void SetupScreen() {
           u8g2.drawUTF8(0, 24 + SCREEN_OFFSET, "Switching...");
           u8g2.sendBuffer();
           delay(400);
-          ESP.restart(); // Forces charger to start fresh from 5V
+          ESP.restart(); // Forces clean USB-PD handshake from 5V
         }
       } break;
       case 6: QCEnable = MenuScreen(QCItems, sizeof(QCItems), QCEnable); break;
@@ -906,7 +875,7 @@ void CalibrationScreen() {
       SENSORCheck();
       Thermostat();
 
-      if (!isfinite(CurrentTemp) || CurrentTemp >= 500.0) {
+      if (CurrentTemp > 500.0) {
         ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
         
         SetTemp = tempSetTemp;
@@ -958,7 +927,7 @@ void CalibrationScreen() {
   }
 
   ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
-  delayMicroseconds(TIME2SETTLE); // Unified 5ms settle delay
+  delayMicroseconds(TIME2SETTLE);
   
   CalTempNew[3] = getChipTemp();
   if ((CalTempNew[0] + 10 < CalTempNew[1]) &&
@@ -1133,7 +1102,6 @@ void PD_Update() {
     default: break;
   }
 
-  // Unified PWM configuration
   ledcSetup(CONTROL_CHANNEL, CONTROL_FREQ, CONTROL_RES);
   ledcAttachPin(CONTROL_PIN, CONTROL_CHANNEL);
   ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
