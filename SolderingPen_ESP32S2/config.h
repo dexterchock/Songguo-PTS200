@@ -29,8 +29,8 @@
 #define BUTTON_N_PIN      2     // button '-'
 #define CONTROL_PIN       5     // heater MOSFET PWM control
 #define CONTROL_CHANNEL   2     // PWM channel
-#define CONTROL_FREQ      200   // PWM frequency
-#define CONTROL_FREQ_20V  1000  // PWM frequency for 20V
+#define CONTROL_FREQ      200   // PWM frequency for <=15V
+#define CONTROL_FREQ_20V  200   // 200Hz prevents GaN USB-PD feedback loop resonance
 #define CONTROL_RES       8     // PWM resolution
 
 #define PD_CFG_0          16
@@ -47,8 +47,8 @@
 
 // Power Limits (duty cycle caps out of 255)
 #define POWER_LIMIT_15    170   // ~66% power limit for 15V
-#define POWER_LIMIT_20    235   // ~92% power limit for 20V 5A (Prevents tripping 100W OCP)
-#define POWER_LIMIT_20_2  120   // ~47% power limit for 20V 3A (Prevents tripping 60W OCP)
+#define POWER_LIMIT_20    235   // ~92% power limit for 20V 5A (Leaves headroom for charger stability)
+#define POWER_LIMIT_20_2  120   // ~47% power limit for 20V 3A
 
 // Default Tip Calibration Points
 #define TEMP200           200   // temp at ADC = 200 
@@ -70,7 +70,7 @@
 #define TIME2SETTLE       5000  // OpAmp output settle time (us)
 #define TIME2SETTLE_20V   2000  // OpAmp output settle time at 20V (us)
 #define SMOOTHIE          0.05  // OpAmp output smoothing factor (1 = no smoothing)
-#define PID_ENABLE        true  // Enable PID control to prevent current spiking
+#define PID_ENABLE        true  // Enable PID control for smooth current scaling
 #define BEEP_ENABLE       true  // enable/disable buzzer
 #define VOLTAGE_VALUE     3     // voltage selection index (20V 3A default)
 #define QC_ENABLE         false // enable/disable QC3.0
