@@ -2,7 +2,7 @@
 #define CONFIG_H
 
 // Firmware version
-#define VERSION "v4.5.3" //20240130
+#define VERSION "v4.5.3"
 #define VERSION_NUM 422
 
 // Accelerometer / IMU Type (PTS200 uses LIS2DH12)
@@ -16,15 +16,15 @@
 #define SH1107
 #define SCREEN_OFFSET     2
 
-// Rotary Encoder Type
-#define ROTARY_TYPE       0     // 0: 2 increments/step; 1: 4 increments/step (default)
+// Rotary / Button Type
+#define ROTARY_TYPE       0     // 0: 2 increments/step; 1: 4 increments/step
 #define BUTTON_DELAY      5
 
 // Pins
 #define SENSOR_PIN        1     // tip temperature sense
 #define VIN_PIN           6     // input voltage sense
 #define BUZZER_PIN        3     // buzzer
-#define BUTTON_PIN        0     // switch right
+#define BUTTON_PIN        0     // switch right / center button
 #define BUTTON_P_PIN      4     // button '+'
 #define BUTTON_N_PIN      2     // button '-'
 #define CONTROL_PIN       5     // heater MOSFET PWM control
@@ -44,9 +44,9 @@
 #define TEMP_SLEEP        150   // sleep temp
 #define TEMP_BOOST        50    // boost step
 #define TEMP_STEP         10    // rotary step
-#define POWER_LIMIT_15    170   // power limit
-#define POWER_LIMIT_20    255   // power limit
-#define POWER_LIMIT_20_2  127   // power limit
+#define POWER_LIMIT_15    170   // power limit (15V)
+#define POWER_LIMIT_20    255   // power limit (20V 5A / 100%)
+#define POWER_LIMIT_20_2  127   // power limit (20V 3A / 50%)
 
 // Default Tip Calibration Points
 #define TEMP200           200   // temp at ADC = 200 
@@ -70,12 +70,9 @@
 #define SMOOTHIE          0.05  // OpAmp output smoothing factor (1 = no smoothing)
 #define PID_ENABLE        false // enable PID control
 #define BEEP_ENABLE       true  // enable/disable buzzer
-#define VOLTAGE_VALUE     3     // voltage selection index
+#define VOLTAGE_VALUE     3     // voltage selection index (20V 3A default)
 #define QC_ENABLE         false // enable/disable QC3.0
 #define MAINSCREEN        1     // main screen style (0: big numbers; 1: info mode)
-
-// EEPROM size allocation
-#define EEPROM_SIZE       1024
 
 // MOSFET Control Definitions
 #if defined(P_MOSFET)           // P-Channel MOSFET
