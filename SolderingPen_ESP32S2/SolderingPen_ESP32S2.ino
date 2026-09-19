@@ -174,7 +174,7 @@ void setup() {
   adc_sensor.attach(SENSOR_PIN);
   adc_vin.attach(VIN_PIN);
 
-  // 7. Initiate USB-PD Handshake (Direct request, no double negotiation)
+  // 7. Initiate USB-PD Handshake (Direct single request)
   pinMode(PD_CFG_0, OUTPUT);
   pinMode(PD_CFG_1, OUTPUT);
   pinMode(PD_CFG_2, OUTPUT);
@@ -466,10 +466,11 @@ void Thermostat() {
   
   limit = getPowerLimit();
 
-  // --- SOFT-START RAMP (Prevents cold tip inrush current from tripping charger OCP) ---
-  if (CurrentTemp < 100.0) {
-    uint8_t coldLimit = (limit * 7) / 10; // Max 70% power while tip is cold
-    ledcWrite(CONTROL_CHANNEL, constrain((HEATER_PWM), 0, coldLimit));
+  // --- SMOOTH POWER RAMP (Prevents sharp inrush pulses from tripping charger OCP) ---
+  if (CurrentTemp < 160.0) {
+    float ramp = 0.55f + 0.45f * (CurrentTemp / 160.0f); // Scales smoothly from 55% to 100%
+    uint8_t rampLimit = (uint8_t)(limit * ramp);
+    ledcWrite(CONTROL_CHANNEL, constrain((HEATER_PWM), 0, rampLimit));
   } else {
     ledcWrite(CONTROL_CHANNEL, constrain((HEATER_PWM), 0, limit));
   }
@@ -573,10 +574,20 @@ void SetupScreen() {
       case 2: TimerScreen(); break;
       case 3: MainScrType = MenuScreen(MainScreenItems, sizeof(MainScreenItems), MainScrType); break;
       case 4: InfoScreen(); break;
-      case 5:
+      case 5: {
+        uint8_t oldVolt = VoltageValue;
         VoltageValue = MenuScreen(VoltageItems, sizeof(VoltageItems), VoltageValue);
-        PD_Update();
-        break;
+        if (oldVolt != VoltageValue) {
+          update_EEPROM();
+          u8g2.clearBuffer();
+          u8g2.setFont(PTS200_16);
+          u8g2.setFontPosTop();
+          u8g2.drawUTF8(0, 24 + SCREEN_OFFSET, "Switching...");
+          u8g2.sendBuffer();
+          delay(400);
+          ESP.restart(); // Clean handshake reset from 5V
+        }
+      } break;
       case 6: QCEnable = MenuScreen(QCItems, sizeof(QCItems), QCEnable); break;
       case 7: beepEnable = MenuScreen(BuzzerItems, sizeof(BuzzerItems), beepEnable); break;
       case 8: 
