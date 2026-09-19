@@ -124,14 +124,14 @@ void setup() {
   pinMode(CONTROL_PIN, OUTPUT);
   digitalWrite(CONTROL_PIN, HEATER_OFF);
 
-  // 2. Hardware pins
+  // 2. Hardware button and sensor pins
   pinMode(SENSOR_PIN, INPUT_PULLUP);
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(BUTTON_P_PIN, INPUT_PULLUP);
   pinMode(BUTTON_N_PIN, INPUT_PULLUP);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
 
-  // 3. Load EEPROM first to know hand orientation
+  // 3. Load EEPROM configuration (to know orientation before turning on display)
   if (!init_EEPROM()) {
     Serial.println("EEPROM initialization failed!");
     while (true) { delay(1000); }
@@ -150,7 +150,7 @@ void setup() {
     while (true) { delay(1000); }
   }
 
-  // 4. Start I2C & light up the screen immediately in correct orientation
+  // 4. Start I2C & light up display immediately in correct orientation
   Wire.begin();
   Wire.setClock(400000);
   u8g2.initDisplay();
@@ -159,29 +159,22 @@ void setup() {
   u8g2.enableUTF8Print();
   u8g2.setDisplayRotation(hand_side ? U8G2_R3 : U8G2_R1);
 
-  // 5. Full-Screen DEXTER Splash Screen
+  // 5. Clean, Minimal DEXTER Splash Screen
   u8g2.firstPage();
   do {
-    // Top border line
-    u8g2.drawHLine(4, 6 + SCREEN_OFFSET, 120);
-
-    // Large Bold "DEXTER" centered
-    u8g2.setFont(u8g2_font_logisoso28_tr);
+    u8g2.setFont(u8g2_font_logisoso24_tr);
     u8g2.setFontPosCenter();
     uint16_t str_width = u8g2.getUTF8Width("DEXTER");
     u8g2.drawUTF8((128 - str_width) / 2, 32 + SCREEN_OFFSET, "DEXTER");
-
-    // Bottom border line
-    u8g2.drawHLine(4, 57 + SCREEN_OFFSET, 120);
   } while (u8g2.nextPage());
 
-  // 6. Serial & ADC
+  // 6. Serial & ADC Setup
   Serial.begin(115200);
   Serial.setTxTimeoutMs(0);
   adc_sensor.attach(SENSOR_PIN);
   adc_vin.attach(VIN_PIN);
 
-  // 7. Direct USB-PD single negotiation (Safe, no double handshake)
+  // 7. Initiate USB-PD Handshake (Direct request, no double negotiation)
   pinMode(PD_CFG_0, OUTPUT);
   pinMode(PD_CFG_1, OUTPUT);
   pinMode(PD_CFG_2, OUTPUT);
@@ -200,13 +193,22 @@ void setup() {
     }
   }
 
+  // 8. Accelerometer Init
+  if (!accel.begin()) {
+    Serial.println("Accelerometer not detected.");
+  }
+
+  // 9. Splash screen hold time (allows charger to stabilize voltage at 20V)
+  delay(600);
+
+  // 10. Measure true, settled supply voltage & tip temp
   Vin = getVIN();
   SetTemp = DefaultTemp;
   RawTemp = denoiseAnalog();
   calculateTemp();
   ShowTemp = CurrentTemp;
 
-  // 8. PID & Rotary Controls
+  // 11. PID & Rotary Controls
   ctrl.SetOutputLimits(0, 255);
   ctrl.SetMode(AUTOMATIC);
 
@@ -214,24 +216,16 @@ void setup() {
   b0 = 0;
   setRotary(TEMP_MIN, TEMP_MAX, TEMP_STEP, DefaultTemp);
 
-  // 9. Accelerometer Init
-  if (!accel.begin()) {
-    Serial.println("Accelerometer not detected.");
-  }
-
   ChipTemp = getChipTemp();
   lastSENSORTmp = getChipTemp();
 
-  // Splash screen hold time so it is clearly readable
-  delay(600);
-
-  // Draw main screen, then sound ready beeps
+  // Draw main screen with true settled voltage, then sound ready beeps
   MainScreen();
 
   sleepmillis = millis();
   beep();
   beep();
-  Serial.println("Soldering Pen Booted");
+  Serial.println("Soldering Pen Ready");
 }
 
 int SENSORCheckTimes = 0;
@@ -471,7 +465,14 @@ void Thermostat() {
   }
   
   limit = getPowerLimit();
-  ledcWrite(CONTROL_CHANNEL, constrain((HEATER_PWM), 0, limit));
+
+  // --- SOFT-START RAMP (Prevents cold tip inrush current from tripping charger OCP) ---
+  if (CurrentTemp < 100.0) {
+    uint8_t coldLimit = (limit * 7) / 10; // Max 70% power while tip is cold
+    ledcWrite(CONTROL_CHANNEL, constrain((HEATER_PWM), 0, coldLimit));
+  } else {
+    ledcWrite(CONTROL_CHANNEL, constrain((HEATER_PWM), 0, limit));
+  }
 }
 
 void beep() {
