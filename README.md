@@ -59,3 +59,31 @@ This is an improved, bug-fixed firmware fork for the **Songguo PTS200** ESP32-S2
 ```bash
 git clone https://github.com/dexterchock/Songguo-PTS200.git
 cd Songguo-PTS200
+```
+
+2. Build and upload using PlatformIO Core or the VS Code extension:
+```bash
+pio run -t upload
+```
+
+### Option 2: Arduino IDE
+
+1. Install the **ESP32** board package in Arduino IDE.
+2. Install the required libraries via Library Manager:
+   * `U8g2` (v2.34.17+)
+   * `QC3Control` (v1.4.1+)
+   * `ESP32AnalogRead` (v0.2.1+)
+   * `PID` (v1.2.1+)
+   * `SparkFun LIS2DH12 Arduino Library` (v1.0.3+)
+3. Select board configuration:
+   * **Board:** `ESP32S2 Dev Module` (or custom PTS200 board definition)
+   * **USB CDC On Boot:** `Enabled`
+   * **Upload Mode:** `Internal USB`
+4. Compile and flash `SolderingPen_ESP32S2/SolderingPen_ESP32S2.ino`.
+
+---
+
+## 📌 Credits & Acknowledgments
+
+* Original firmware by [Eddddddddy/Songguo-PTS200](https://github.com/Eddddddddy/Songguo-PTS200).
+* Open-source libraries: `U8g2`, `PID_v1`, `QC3Control`, `ESP32AnalogRead`, `SparkFun_LIS2DH12`.
