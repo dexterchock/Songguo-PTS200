@@ -159,7 +159,7 @@ void setup() {
   u8g2.enableUTF8Print();
   u8g2.setDisplayRotation(hand_side ? U8G2_R3 : U8G2_R1);
 
-  // 5. Clean, Minimal DEXTER Splash Screen
+  // 5. Clean, Minimal DEXTER Splash Screen (No lines, regular sans-serif)
   u8g2.firstPage();
   do {
     u8g2.setFont(u8g2_font_logisoso24_tr);
@@ -363,8 +363,8 @@ void SENSORCheck() {
   // Turn heater off during ADC sampling
   ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
   
-  if (VoltageValue >= 3) delayMicroseconds(TIME2SETTLE_20V);
-  else delayMicroseconds(TIME2SETTLE);
+  // Unified 5ms settle delay: fully clears OpAmp input filter charge across all voltages
+  delayMicroseconds(TIME2SETTLE);
 
   double temp = denoiseAnalog();
 
@@ -373,17 +373,26 @@ void SENSORCheck() {
     SensorCounter = 0;
   }
 
+  // Require 3 CONSECUTIVE readings >= 950 to declare tip unplugged
+  // (Prevents fast-ramp electrical transients from faking an open-circuit disconnect)
+  static uint8_t highAdcCount = 0;
   if (temp >= 950.0) {
-    RawTemp = temp;
-    CurrentTemp = 999.0;
+    if (highAdcCount < 3) {
+      highAdcCount++;
+      // Transient spike ignored, let smoothie filter handle it
+    } else {
+      RawTemp = temp;
+      CurrentTemp = 999.0;
+    }
   } else {
+    highAdcCount = 0;
     RawTemp += (temp - RawTemp) * SMOOTHIE;
     calculateTemp();
   }
 
   if (!isfinite(CurrentTemp) || CurrentTemp >= 500.0) {
     ShowTemp = 999;
-    if (tipDisconnectCount < 3) tipDisconnectCount++;
+    if (tipDisconnectCount < 5) tipDisconnectCount++;
     else TipIsPresent = false;
   } else {
     tipDisconnectCount = 0;
@@ -401,6 +410,7 @@ void SENSORCheck() {
     isWorky = false;
   }
 
+  // Only open tip selection menu if tip was genuinely missing and re-inserted
   if (!TipIsPresent && (ShowTemp < 500)) {
     ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
     beep();
@@ -466,7 +476,7 @@ void Thermostat() {
   
   limit = getPowerLimit();
 
-  // --- SMOOTH POWER RAMP (Prevents sharp inrush pulses from tripping charger OCP) ---
+  // Smooth power ramp from cold to 160°C to eliminate sharp inrush current spikes
   if (CurrentTemp < 160.0) {
     float ramp = 0.55f + 0.45f * (CurrentTemp / 160.0f); // Scales smoothly from 55% to 100%
     uint8_t rampLimit = (uint8_t)(limit * ramp);
@@ -585,7 +595,7 @@ void SetupScreen() {
           u8g2.drawUTF8(0, 24 + SCREEN_OFFSET, "Switching...");
           u8g2.sendBuffer();
           delay(400);
-          ESP.restart(); // Clean handshake reset from 5V
+          ESP.restart(); // Forces charger to start fresh from 5V
         }
       } break;
       case 6: QCEnable = MenuScreen(QCItems, sizeof(QCItems), QCEnable); break;
@@ -948,8 +958,7 @@ void CalibrationScreen() {
   }
 
   ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
-  if (VoltageValue >= 3) delayMicroseconds(TIME2SETTLE_20V);
-  else delayMicroseconds(TIME2SETTLE);
+  delayMicroseconds(TIME2SETTLE); // Unified 5ms settle delay
   
   CalTempNew[3] = getChipTemp();
   if ((CalTempNew[0] + 10 < CalTempNew[1]) &&
@@ -1124,9 +1133,8 @@ void PD_Update() {
     default: break;
   }
 
-  if (VoltageValue >= 3) ledcSetup(CONTROL_CHANNEL, CONTROL_FREQ_20V, CONTROL_RES);
-  else ledcSetup(CONTROL_CHANNEL, CONTROL_FREQ, CONTROL_RES);
-
+  // Unified PWM configuration
+  ledcSetup(CONTROL_CHANNEL, CONTROL_FREQ, CONTROL_RES);
   ledcAttachPin(CONTROL_PIN, CONTROL_CHANNEL);
   ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
 }
