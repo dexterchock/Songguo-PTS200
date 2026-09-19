@@ -120,30 +120,18 @@ float fmap(float x, float in_min, float in_max, float out_min, float out_max) {
 }
 
 void setup() {
-  // Early heater cutoff
+  // 1. Immediate heater cutoff for safety
   pinMode(CONTROL_PIN, OUTPUT);
   digitalWrite(CONTROL_PIN, HEATER_OFF);
 
-  // Safe initial PD request
-  pinMode(PD_CFG_0, OUTPUT);
-  pinMode(PD_CFG_1, OUTPUT);
-  pinMode(PD_CFG_2, OUTPUT);
-  digitalWrite(PD_CFG_0, LOW);
-  digitalWrite(PD_CFG_1, LOW);
-  digitalWrite(PD_CFG_2, LOW);
-
-  Serial.begin(115200);
-  Serial.setTxTimeoutMs(0);
-
-  adc_sensor.attach(SENSOR_PIN);
-  adc_vin.attach(VIN_PIN);
-
+  // 2. Hardware pins
   pinMode(SENSOR_PIN, INPUT_PULLUP);
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(BUTTON_P_PIN, INPUT_PULLUP);
   pinMode(BUTTON_N_PIN, INPUT_PULLUP);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
 
+  // 3. Load EEPROM first to know hand orientation
   if (!init_EEPROM()) {
     Serial.println("EEPROM initialization failed!");
     while (true) { delay(1000); }
@@ -162,9 +150,46 @@ void setup() {
     while (true) { delay(1000); }
   }
 
+  // 4. Start I2C & light up the screen immediately in correct orientation
+  Wire.begin();
+  Wire.setClock(400000);
+  u8g2.initDisplay();
+  u8g2.begin();
+  u8g2.sendF("ca", 0xa8, 0x3f);
+  u8g2.enableUTF8Print();
+  u8g2.setDisplayRotation(hand_side ? U8G2_R3 : U8G2_R1);
+
+  // 5. Full-Screen DEXTER Splash Screen
+  u8g2.firstPage();
+  do {
+    // Top border line
+    u8g2.drawHLine(4, 6 + SCREEN_OFFSET, 120);
+
+    // Large Bold "DEXTER" centered
+    u8g2.setFont(u8g2_font_logisoso28_tr);
+    u8g2.setFontPosCenter();
+    uint16_t str_width = u8g2.getUTF8Width("DEXTER");
+    u8g2.drawUTF8((128 - str_width) / 2, 32 + SCREEN_OFFSET, "DEXTER");
+
+    // Bottom border line
+    u8g2.drawHLine(4, 57 + SCREEN_OFFSET, 120);
+  } while (u8g2.nextPage());
+
+  // 6. Serial & ADC
+  Serial.begin(115200);
+  Serial.setTxTimeoutMs(0);
+  adc_sensor.attach(SENSOR_PIN);
+  adc_vin.attach(VIN_PIN);
+
+  // 7. Direct USB-PD single negotiation (Safe, no double handshake)
+  pinMode(PD_CFG_0, OUTPUT);
+  pinMode(PD_CFG_1, OUTPUT);
+  pinMode(PD_CFG_2, OUTPUT);
+  PD_Update();
+
   if (QCEnable) {
     QC.begin();
-    delay(100);
+    delay(50);
     switch (VoltageValue) {
       case 0: QC.set9V(); break;
       case 1: QC.set12V(); break;
@@ -175,16 +200,13 @@ void setup() {
     }
   }
 
-  PD_Update();
-  delay(100);
   Vin = getVIN();
-
   SetTemp = DefaultTemp;
   RawTemp = denoiseAnalog();
-
   calculateTemp();
   ShowTemp = CurrentTemp;
 
+  // 8. PID & Rotary Controls
   ctrl.SetOutputLimits(0, 255);
   ctrl.SetMode(AUTOMATIC);
 
@@ -192,34 +214,24 @@ void setup() {
   b0 = 0;
   setRotary(TEMP_MIN, TEMP_MAX, TEMP_STEP, DefaultTemp);
 
-  sleepmillis = millis();
-  beep();
-  beep();
-  Serial.println("Soldering Pen Booted");
-
-  Wire.begin();
-  Wire.setClock(400000); // 400kHz Fast I2C mode
+  // 9. Accelerometer Init
   if (!accel.begin()) {
-    delay(500);
     Serial.println("Accelerometer not detected.");
-  } else {
-    // Pre-fill accelerometer buffer to avoid wake-up latency
-    for (int i = 0; i < ACCEL_SAMPLES; i++) {
-      accels[i][0] = accel.getRawX() + 32768;
-      accels[i][1] = accel.getRawY() + 32768;
-      accels[i][2] = accel.getRawZ() + 32768;
-      delayMicroseconds(200);
-    }
-    accelBufferReady = true;
   }
 
   ChipTemp = getChipTemp();
   lastSENSORTmp = getChipTemp();
-  u8g2.initDisplay();
-  u8g2.begin();
-  u8g2.sendF("ca", 0xa8, 0x3f);
-  u8g2.enableUTF8Print();
-  u8g2.setDisplayRotation(hand_side ? U8G2_R3 : U8G2_R1);
+
+  // Splash screen hold time so it is clearly readable
+  delay(600);
+
+  // Draw main screen, then sound ready beeps
+  MainScreen();
+
+  sleepmillis = millis();
+  beep();
+  beep();
+  Serial.println("Soldering Pen Booted");
 }
 
 int SENSORCheckTimes = 0;
