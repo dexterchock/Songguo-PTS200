@@ -29,7 +29,7 @@
 #define BUTTON_N_PIN      2     // button '-'
 #define CONTROL_PIN       5     // heater MOSFET PWM control
 #define CONTROL_CHANNEL   2     // PWM channel
-#define CONTROL_FREQ      200   // Unified PWM frequency (200Hz prevents GaN loop resonance across all voltages)
+#define CONTROL_FREQ      200   // Unified 200Hz PWM
 #define CONTROL_RES       8     // PWM resolution
 
 #define PD_CFG_0          16
@@ -45,9 +45,9 @@
 #define TEMP_STEP         10    // rotary step
 
 // Power Limits (duty cycle caps out of 255)
-#define POWER_LIMIT_15    170   // ~66% power limit for 15V
-#define POWER_LIMIT_20    235   // ~92% power limit for 20V 5A (Leaves headroom to prevent tripping 100W OCP)
-#define POWER_LIMIT_20_2  120   // ~47% power limit for 20V 3A (Prevents tripping 60W OCP)
+#define POWER_LIMIT_15    225   // UNLOCKED: ~88% duty cycle gives ~50W on 15V (super fast & rock-solid)
+#define POWER_LIMIT_20    220   // Safety cap for 20V 5A
+#define POWER_LIMIT_20_2  120   // Safety cap for 20V 3A
 
 // Default Tip Calibration Points
 #define TEMP200           200   // temp at ADC = 200 
@@ -66,11 +66,11 @@
 #define WAKEUP_THRESHOLD  10    // motion sensitivity
 
 // Control & Settlement Delays
-#define TIME2SETTLE       5000  // Unified OpAmp settle time (5ms fully clears filter charge across all voltages)
-#define SMOOTHIE          0.05  // OpAmp output smoothing factor (1 = no smoothing)
-#define PID_ENABLE        true  // Enable PID control for smooth current scaling
+#define TIME2SETTLE       5000  // Unified 5ms settle time (clears filter charge completely)
+#define SMOOTHIE          0.05  // OpAmp output smoothing factor
+#define PID_ENABLE        false // Reverted to simple, rock-solid bang-bang power delivery
 #define BEEP_ENABLE       true  // enable/disable buzzer
-#define VOLTAGE_VALUE     3     // voltage selection index (20V 3A default)
+#define VOLTAGE_VALUE     2     // Default: 15V (Rock-solid, supercharged ~50W)
 #define QC_ENABLE         false // enable/disable QC3.0
 #define MAINSCREEN        1     // main screen style (0: big numbers; 1: info mode)
 
