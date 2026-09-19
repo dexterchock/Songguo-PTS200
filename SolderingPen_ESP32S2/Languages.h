@@ -161,4 +161,4 @@ const char *txt_temp_2[] = {"ADC: "};
 const char *txt_wait_pls[] = {"Please wait..."};
 const char *txt_enter_tip_name[] = {"Enter Name:"};
 
-#endif
+#endif // LANGUAGES_H
