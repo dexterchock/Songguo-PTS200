@@ -29,8 +29,7 @@
 #define BUTTON_N_PIN      2     // button '-'
 #define CONTROL_PIN       5     // heater MOSFET PWM control
 #define CONTROL_CHANNEL   2     // PWM channel
-#define CONTROL_FREQ      200   // PWM frequency for <=15V
-#define CONTROL_FREQ_20V  200   // 200Hz prevents GaN USB-PD feedback loop resonance
+#define CONTROL_FREQ      200   // Unified PWM frequency (200Hz prevents GaN loop resonance across all voltages)
 #define CONTROL_RES       8     // PWM resolution
 
 #define PD_CFG_0          16
@@ -47,8 +46,8 @@
 
 // Power Limits (duty cycle caps out of 255)
 #define POWER_LIMIT_15    170   // ~66% power limit for 15V
-#define POWER_LIMIT_20    235   // ~92% power limit for 20V 5A (Leaves headroom for charger stability)
-#define POWER_LIMIT_20_2  120   // ~47% power limit for 20V 3A
+#define POWER_LIMIT_20    235   // ~92% power limit for 20V 5A (Leaves headroom to prevent tripping 100W OCP)
+#define POWER_LIMIT_20_2  120   // ~47% power limit for 20V 3A (Prevents tripping 60W OCP)
 
 // Default Tip Calibration Points
 #define TEMP200           200   // temp at ADC = 200 
@@ -67,8 +66,7 @@
 #define WAKEUP_THRESHOLD  10    // motion sensitivity
 
 // Control & Settlement Delays
-#define TIME2SETTLE       5000  // OpAmp output settle time (us)
-#define TIME2SETTLE_20V   2000  // OpAmp output settle time at 20V (us)
+#define TIME2SETTLE       5000  // Unified OpAmp settle time (5ms fully clears filter charge across all voltages)
 #define SMOOTHIE          0.05  // OpAmp output smoothing factor (1 = no smoothing)
 #define PID_ENABLE        true  // Enable PID control for smooth current scaling
 #define BEEP_ENABLE       true  // enable/disable buzzer
