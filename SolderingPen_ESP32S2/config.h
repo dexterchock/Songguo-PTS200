@@ -37,16 +37,18 @@
 #define PD_CFG_1          17
 #define PD_CFG_2          18
 
-// Default Temperature Controls (°C)
+// Temperature Controls (°C)
 #define TEMP_MIN          50    // min temp
 #define TEMP_MAX          450   // max temp
 #define TEMP_DEFAULT      260   // default temp
 #define TEMP_SLEEP        150   // sleep temp
 #define TEMP_BOOST        50    // boost step
 #define TEMP_STEP         10    // rotary step
-#define POWER_LIMIT_15    170   // power limit (15V)
-#define POWER_LIMIT_20    255   // power limit (20V 5A / 100%)
-#define POWER_LIMIT_20_2  127   // power limit (20V 3A / 50%)
+
+// Power Limits (duty cycle caps out of 255)
+#define POWER_LIMIT_15    170   // ~66% power limit for 15V
+#define POWER_LIMIT_20    235   // ~92% power limit for 20V 5A (Prevents tripping 100W OCP)
+#define POWER_LIMIT_20_2  120   // ~47% power limit for 20V 3A (Prevents tripping 60W OCP)
 
 // Default Tip Calibration Points
 #define TEMP200           200   // temp at ADC = 200 
@@ -68,7 +70,7 @@
 #define TIME2SETTLE       5000  // OpAmp output settle time (us)
 #define TIME2SETTLE_20V   2000  // OpAmp output settle time at 20V (us)
 #define SMOOTHIE          0.05  // OpAmp output smoothing factor (1 = no smoothing)
-#define PID_ENABLE        false // enable PID control
+#define PID_ENABLE        true  // Enable PID control to prevent current spiking
 #define BEEP_ENABLE       true  // enable/disable buzzer
 #define VOLTAGE_VALUE     3     // voltage selection index (20V 3A default)
 #define QC_ENABLE         false // enable/disable QC3.0
