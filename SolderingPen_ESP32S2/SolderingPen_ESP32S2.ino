@@ -1,11 +1,7 @@
-//
 #include "config.h"
 
-//
-#include <Button2.h>
 #include <QC3Control.h>
 
-//
 #include "FirmwareMSC.h"
 #include "Languages.h"
 #include "USB.h"
@@ -16,7 +12,6 @@ QC3Control QC(14, 13);
 #include <U8g2lib.h>  
 #include "PTS200_16.h"
 #include <ESP32AnalogRead.h>  
-#include "esp_adc_cal.h"
 
 #ifdef U8X8_HAVE_HW_SPI
 #include <SPI.h>
@@ -32,15 +27,16 @@ QC3Control QC(14, 13);
 #include "SparkFun_LIS2DH12.h"  
 SPARKFUN_LIS2DH12 accel;  
 
-uint16_t accels[32][3];
-uint8_t accelIndex = 0;
 #define ACCEL_SAMPLES 32
+uint16_t accels[ACCEL_SAMPLES][3];
+uint8_t accelIndex = 0;
+bool accelBufferReady = false;
 
 // PID parameters
 double aggKp = 11, aggKi = 0.5, aggKd = 1;
 double consKp = 11, consKi = 3, consKd = 5;
 
-// EEPROM defaults
+// EEPROM variables
 uint16_t DefaultTemp = TEMP_DEFAULT;
 uint16_t SleepTemp = TEMP_SLEEP;
 uint8_t BoostTemp = TEMP_BOOST;
@@ -81,6 +77,7 @@ bool inBoostMode = false;
 bool isWorky = true;
 bool beepIfWorky = true;
 bool TipIsPresent = true;
+uint8_t tipDisconnectCount = 0;
 
 // Timing variables
 uint32_t sleepmillis;
@@ -110,7 +107,6 @@ uint8_t language = 0;
 uint8_t hand_side = 0;
 
 FirmwareMSC MSC_Update;
-Button2 btn;
 float limit = 0.0;
 
 uint8_t getPowerLimit() {
@@ -119,17 +115,16 @@ uint8_t getPowerLimit() {
   return POWER_LIMIT_20;
 }
 
-// Float map to preserve fractional accuracy during ADC to temperature conversion
 float fmap(float x, float in_min, float in_max, float out_min, float out_max) {
   return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
 void setup() {
-  // Early heater OFF initialization
+  // Early heater cutoff
   pinMode(CONTROL_PIN, OUTPUT);
   digitalWrite(CONTROL_PIN, HEATER_OFF);
 
-  // Known-safe PD pin initialization (000 = 9V initial request)
+  // Safe initial PD request
   pinMode(PD_CFG_0, OUTPUT);
   pinMode(PD_CFG_1, OUTPUT);
   pinMode(PD_CFG_2, OUTPUT);
@@ -170,7 +165,6 @@ void setup() {
   if (QCEnable) {
     QC.begin();
     delay(100);
-    // Preserved exact original QC mapping
     switch (VoltageValue) {
       case 0: QC.set9V(); break;
       case 1: QC.set12V(); break;
@@ -201,17 +195,26 @@ void setup() {
   sleepmillis = millis();
   beep();
   beep();
-  Serial.println("Soldering Pen");
+  Serial.println("Soldering Pen Booted");
 
   Wire.begin();
-  Wire.setClock(100000);
-  if (accel.begin() == false) {
+  Wire.setClock(400000); // 400kHz Fast I2C mode
+  if (!accel.begin()) {
     delay(500);
     Serial.println("Accelerometer not detected.");
+  } else {
+    // Pre-fill accelerometer buffer to avoid wake-up latency
+    for (int i = 0; i < ACCEL_SAMPLES; i++) {
+      accels[i][0] = accel.getRawX() + 32768;
+      accels[i][1] = accel.getRawY() + 32768;
+      accels[i][2] = accel.getRawZ() + 32768;
+      delayMicroseconds(200);
+    }
+    accelBufferReady = true;
   }
 
   ChipTemp = getChipTemp();
-  lastSENSORTmp = getMPUTemp();
+  lastSENSORTmp = getChipTemp();
   u8g2.initDisplay();
   u8g2.begin();
   u8g2.sendF("ca", 0xa8, 0x3f);
@@ -258,7 +261,7 @@ void ROTARYCheck() {
           buttonmillis = millis();
           while ((digitalRead(BUTTON_PIN)) && ((millis() - buttonmillis) < 200)) delay(10);
           
-          if ((millis() - buttonmillis) >= 200) {  // single click
+          if ((millis() - buttonmillis) >= 200) {  // Single click
             if (inOffMode) {
               inOffMode = false;
               handleMoved = true;
@@ -267,7 +270,7 @@ void ROTARYCheck() {
               if (inBoostMode) boostmillis = millis();
               handleMoved = true;
             }
-          } else {  // double click
+          } else {  // Double click
             inOffMode = true;
           }
         }
@@ -320,6 +323,10 @@ void SENSORCheck() {
 
     if (accelIndex >= ACCEL_SAMPLES) {
       accelIndex = 0;
+      accelBufferReady = true;
+    }
+
+    if (accelBufferReady) {
       uint64_t avg[3] = {0, 0, 0};
       for (int i = 0; i < ACCEL_SAMPLES; i++) {
         avg[0] += accels[i][0];
@@ -329,6 +336,7 @@ void SENSORCheck() {
       avg[0] /= ACCEL_SAMPLES;
       avg[1] /= ACCEL_SAMPLES;
       avg[2] /= ACCEL_SAMPLES;
+
       uint64_t var[3] = {0, 0, 0};
       for (int i = 0; i < ACCEL_SAMPLES; i++) {
         var[0] += (accels[i][0] - avg[0]) * (accels[i][0] - avg[0]);
@@ -339,13 +347,14 @@ void SENSORCheck() {
       var[1] /= ACCEL_SAMPLES;
       var[2] /= ACCEL_SAMPLES;
 
-      if (var[0] > (WAKEUPthreshold * 10000) || var[1] > (WAKEUPthreshold * 10000) || var[2] > (WAKEUPthreshold * 10000)) {
+      uint64_t vThresh = (uint64_t)WAKEUPthreshold * 10000ULL;
+      if (var[0] > vThresh || var[1] > vThresh || var[2] > vThresh) {
         handleMoved = true;
       }
     }
   }
 
-  // Shut heater off while performing ADC reading
+  // Turn heater off during ADC sampling
   ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
   
   if (VoltageValue >= 3) delayMicroseconds(TIME2SETTLE_20V);
@@ -368,7 +377,10 @@ void SENSORCheck() {
 
   if (!isfinite(CurrentTemp) || CurrentTemp >= 500.0) {
     ShowTemp = 999;
+    if (tipDisconnectCount < 3) tipDisconnectCount++;
+    else TipIsPresent = false;
   } else {
+    tipDisconnectCount = 0;
     if ((ShowTemp != Setpoint) || (abs(ShowTemp - CurrentTemp) > 5))
       ShowTemp = CurrentTemp;
     if (abs(ShowTemp - Setpoint) <= 1) ShowTemp = Setpoint;
@@ -383,13 +395,12 @@ void SENSORCheck() {
     isWorky = false;
   }
 
-  if (ShowTemp >= 500) TipIsPresent = false;
   if (!TipIsPresent && (ShowTemp < 500)) {
     ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
     beep();
     TipIsPresent = true;
     ChangeTipScreen();
-    if(!update_EEPROM()) Serial.println("EEPROM update failed on tip change");
+    if (!update_EEPROM()) Serial.println("EEPROM update failed on tip change");
     handleMoved = true;
     RawTemp = denoiseAnalog();
     c0 = LOW;
@@ -475,7 +486,6 @@ int getRotary() {
 }
 
 bool getEEPROM() { return read_EEPROM(); }
-
 bool updateEEPROM() { return update_EEPROM(); }
 
 void MainScreen() {
@@ -486,7 +496,9 @@ void MainScreen() {
     u8g2.drawUTF8(0, 0 + SCREEN_OFFSET, txt_set_temp[language]);
     u8g2.setCursor(40, 0 + SCREEN_OFFSET);
     u8g2.setFont(u8g2_font_unifont_t_chinese3);
-    u8g2.print(Setpoint, 0);
+
+    uint16_t dispSet = (inOffMode || inLockMode) ? SetTemp : (inSleepMode ? SleepTemp : (uint16_t)Setpoint);
+    u8g2.print(dispSet);
 
     u8g2.setFont(PTS200_16);
 
@@ -504,8 +516,8 @@ void MainScreen() {
 
     u8g2.setFont(u8g2_font_unifont_t_chinese3);
     if (MainScrType) {
-      float fVin = (float)Vin / 1000;
-      newSENSORTmp = newSENSORTmp + 0.01 * getMPUTemp();
+      float fVin = (float)Vin / 1000.0f;
+      newSENSORTmp = newSENSORTmp + 0.01f * getChipTemp();
       SENSORTmpTime++;
       if (SENSORTmpTime >= 100) {
         lastSENSORTmp = newSENSORTmp;
@@ -684,16 +696,9 @@ uint8_t MenuScreen(const char *Items[][language_types], uint8_t numberOfItems, u
   uint8_t lastselected = selected;
   int8_t arrow = 0;
   if (selected) arrow = 1;
-  numberOfItems = numberOfItems / language_types;
-  numberOfItems >>= 2;
+  numberOfItems = (numberOfItems / language_types) >> 2;
 
-#if defined(SSD1306)
-  setRotary(0, numberOfItems + 3, 1, selected);
-#elif defined(SH1107)
   setRotary(0, numberOfItems - 2, 1, selected);
-#else
-#error Wrong OLED controller type!
-#endif
 
   bool lastbutton = (!digitalRead(BUTTON_PIN));
   do {
@@ -724,8 +729,7 @@ uint8_t MenuScreen(const char *Items[][language_types], uint8_t numberOfItems, u
 }
 
 void MessageScreen(const char *Items[][language_types], uint8_t numberOfItems) {
-  numberOfItems = numberOfItems / language_types;
-  numberOfItems >>= 2;
+  numberOfItems = (numberOfItems / language_types) >> 2;
   bool lastbutton = (!digitalRead(BUTTON_PIN));
   u8g2.firstPage();
   do {
@@ -777,7 +781,7 @@ void InfoScreen() {
   bool lastbutton = (!digitalRead(BUTTON_PIN));
   do {
     Vin = getVIN();
-    float fVin = (float)Vin / 1000;
+    float fVin = (float)Vin / 1000.0f;
     float fTmp = getChipTemp();
     u8g2.firstPage();
     do {
@@ -945,7 +949,7 @@ void CalibrationScreen() {
 
   u8g2.setPowerSave(inOffMode ? 1 : 0);
 
-  if(!update_EEPROM()) Serial.println("EEPROM update failed on calibration finish");
+  if (!update_EEPROM()) Serial.println("EEPROM update failed on calibration finish");
 }
 
 void InputNameScreen() {
@@ -1013,7 +1017,7 @@ uint16_t denoiseAnalog() {
   int resultArray[8];
   for (uint8_t i = 0; i < 8; i++) {
     float raw_adc = adc_sensor.readMiliVolts();
-    resultArray[i] = constrain(0.5378 * raw_adc + 6.3959, 20, 1000);
+    resultArray[i] = constrain(0.5378f * raw_adc + 6.3959f, 20.0f, 1000.0f);
   }
   for (uint8_t i = 0; i < 8; i++) {
     for (uint8_t j = i + 1; j < 8; j++) {
@@ -1029,36 +1033,23 @@ uint16_t denoiseAnalog() {
 }
 
 double getChipTemp() {
-#if defined(MPU)
-  mpu6050.update();
-  return mpu6050.getTemp();
-#elif defined(LIS)
+#if defined(LIS)
   return accel.getTemperature();
 #else
-  #error "No temperature/IMU sensor type defined: define LIS or MPU"
-#endif
-}
-
-float getMPUTemp() {
-#if defined(MPU)
-  mpu6050.update();
-  return mpu6050.getTemp();
-#elif defined(LIS)
-  return accel.getTemperature();
-#else
-  #error "No temperature/IMU sensor type defined: define LIS or MPU"
+  #error "No temperature/IMU sensor type defined"
 #endif
 }
 
 uint16_t getVIN() {
   long result = 0;
   for (uint8_t i = 0; i < 4; i++) result += adc_vin.readMiliVolts();
-  return ((result / 4) * 31.3);
+  return ((result / 4) * 31.3f);
 }
 
 unsigned int Button_Time1 = 0, Button_Time2 = 0;
 
 void Button_loop() {
+  // Pin 2 (-) Decrement / Step down
   if (!digitalRead(BUTTON_N_PIN) && a0 == 1) {
     delay(BUTTON_DELAY);
     if (!digitalRead(BUTTON_N_PIN)) {
@@ -1078,6 +1069,7 @@ void Button_loop() {
     a0 = 1;
   }
 
+  // Pin 4 (+) Increment / Step up
   if (!digitalRead(BUTTON_P_PIN) && b0 == 1) {
     delay(BUTTON_DELAY);
     if (!digitalRead(BUTTON_P_PIN)) {
@@ -1134,11 +1126,4 @@ static void usbEventCallback(void *arg, esp_event_base_t event_base, int32_t eve
       default: break;
     }
   }
-}
-
-void turnOffHeater(Button2 &b) { 
-  inOffMode = true; 
-  Output = 0;
-  Setpoint = 0;
-  ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
 }
