@@ -74,6 +74,7 @@ bool inLockMode = true;
 bool inSleepMode = false;
 bool inOffMode = false;
 bool inBoostMode = false;
+bool inLevelMode = false; // Vertical spirit level mode
 bool isWorky = true;
 bool beepIfWorky = true;
 bool TipIsPresent = true;
@@ -118,6 +119,8 @@ float fmap(float x, float in_min, float in_max, float out_min, float out_max) {
   return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
+void LevelScreen();
+
 void setup() {
   // 1. Immediate heater cutoff for safety
   pinMode(CONTROL_PIN, OUTPUT);
@@ -158,7 +161,7 @@ void setup() {
   u8g2.enableUTF8Print();
   u8g2.setDisplayRotation(hand_side ? U8G2_R3 : U8G2_R1);
 
-  // 5. Clean, Minimal DEXTER Splash Screen
+  // 5. Clean Minimal DEXTER Splash Screen
   u8g2.firstPage();
   do {
     u8g2.setFont(u8g2_font_logisoso24_tr);
@@ -197,16 +200,15 @@ void setup() {
     Serial.println("Accelerometer not detected.");
   }
 
-  // 9. Splash screen hold time (allows charger to stabilize voltage)
+  // 9. Splash screen hold time
   delay(600);
 
-  // 10. Measure true, settled supply voltage & initial tip presence
+  // 10. Measure settled supply voltage & initial tip state
   Vin = getVIN();
   SetTemp = DefaultTemp;
   RawTemp = denoiseAnalog();
   calculateTemp();
 
-  // Instant check on boot: adaptive threshold works on both 5V USB and 15V/20V PD
   double bootThreshold = (Vin < 7000) ? 280.0 : 470.0;
   if (RawTemp > bootThreshold) {
     TipIsPresent = false;
@@ -228,7 +230,7 @@ void setup() {
   ChipTemp = getChipTemp();
   lastSENSORTmp = getChipTemp();
 
-  // Draw main screen with true settled voltage, then sound ready beeps
+  // Draw main screen, then sound ready beeps
   MainScreen();
 
   sleepmillis = millis();
@@ -250,7 +252,12 @@ void loop() {
   SENSORCheckTimes++;
 
   Thermostat();
-  MainScreen();
+
+  if (inLevelMode) {
+    LevelScreen(); // Renders the 90° spirit level HUD
+  } else {
+    MainScreen();  // Renders the normal soldering telemetry screen
+  }
 }
 
 void ROTARYCheck() {
@@ -260,15 +267,37 @@ void ROTARYCheck() {
   if (!c && c0) {
     delay(10);
     if (digitalRead(BUTTON_PIN) == c) {
-      beep();
       buttonmillis = millis();
-      delay(10);
-      while ((!digitalRead(BUTTON_PIN)) && ((millis() - buttonmillis) < 500));
-      
-      delay(10);
-      if ((millis() - buttonmillis) >= 500) {
+
+      // If already in Level Mode, a single press exits back to main screen
+      if (inLevelMode) {
+        inLevelMode = false;
+        beep();
+        while (!digitalRead(BUTTON_PIN)) delay(10);
+        c0 = digitalRead(BUTTON_PIN);
+        return;
+      }
+
+      // Check how long the button is held
+      while ((!digitalRead(BUTTON_PIN)) && ((millis() - buttonmillis) < 5000)) {
+        delay(10);
+      }
+
+      uint32_t pressDuration = millis() - buttonmillis;
+
+      if (pressDuration >= 5000) {
+        // HELD FOR >= 5 SECONDS: Activate Heat-Set Level Mode!
+        inLevelMode = true;
+        beep();
+        beep();
+        while (!digitalRead(BUTTON_PIN)) delay(10); // Wait for release
+      } else if (pressDuration >= 500) {
+        // HELD FOR 0.5s - 5s: Open Settings Menu
+        beep();
         SetupScreen();
       } else {
+        // SHORT PRESS: Handle Unlock / Boost / Off
+        beep();
         if (inLockMode) {
           inLockMode = false;
           handleMoved = true;
@@ -305,7 +334,7 @@ void ROTARYCheck() {
 }
 
 void SLEEPCheck() {
-  if (inLockMode) return;
+  if (inLockMode || inLevelMode) return; // Never sleep while aligning heat inserts
 
   if (handleMoved) {
     u8g2.setPowerSave(0);
@@ -380,20 +409,18 @@ void SENSORCheck() {
     SensorCounter = 0;
   }
 
-  // --- ADAPTIVE OPEN-CIRCUIT THRESHOLD ---
-  // On weak 5V laptop USB (<7V): max operating temp is ~120°C; unplugged saturation is ~350-420°C -> threshold 280°C.
-  // On fast chargers (>=7V): max operating temp is 450°C; unplugged saturation is 1000°C -> threshold 470°C.
+  // Adaptive threshold: 280°C on 5V weak USB, 470°C on fast chargers
   double openCircuitThreshold = (Vin < 7000) ? 280.0 : 470.0;
 
   if (temp > openCircuitThreshold) {
-    // TIP IS UNPLUGGED: Bypass the slow smoothing filter immediately!
+    // TIP IS UNPLUGGED: Instant bypass of smoothing filter
     TipIsPresent = false;
     RawTemp = temp;
     CurrentTemp = 999.0;
     ShowTemp = 999;
     ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
   } else {
-    // TIP IS PLUGGED IN: Smooth filter keeps the display calm and steady
+    // TIP IS PLUGGED IN: Smooth filter keeps display calm
     RawTemp += (temp - RawTemp) * SMOOTHIE;
     calculateTemp();
 
@@ -411,7 +438,7 @@ void SENSORCheck() {
     isWorky = false;
   }
 
-  // TIP RE-INSERTED: When tip is inserted, reading drops back safely below the threshold
+  // Re-insertion detection
   if (!TipIsPresent && (temp < openCircuitThreshold)) {
     ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
     beep();
@@ -464,7 +491,6 @@ void Thermostat() {
     ctrl.SetOutputLimits(255 - limit, 255);
     ctrl.Compute();
   } else {
-    // Robust, zero-jitter direct control
     if ((CurrentTemp + 0.5) < Setpoint)
       Output = 0;
     else
@@ -473,6 +499,72 @@ void Thermostat() {
   
   limit = getPowerLimit();
   ledcWrite(CONTROL_CHANNEL, constrain((HEATER_PWM), 0, limit));
+}
+
+// ----------------------------------------------------------------------------
+// 90° VERTICAL SPIRIT LEVEL HUD (HEAT INSERT MODE)
+// ----------------------------------------------------------------------------
+void LevelScreen() {
+  // Read live gravity tilt on transverse axes
+  int16_t rawX = accel.getRawX();
+  int16_t rawZ = accel.getRawZ();
+
+  // If orientation is flipped for Left Hand mode, mirror the X axis
+  if (hand_side) rawX = -rawX;
+
+  // Scale raw tilt into pixel offsets (16384 counts = 1G tilt)
+  // Pitch error moves the center line UP/DOWN
+  int8_t pitchOffset = constrain(rawZ / 180, -18, 18);
+  // Roll error tilts the center line
+  int8_t rollTilt = constrain(rawX / 220, -10, 10);
+
+  // Check if perfectly perpendicular (within ~1.5° window)
+  bool isVertical = (abs(rawX) < 450) && (abs(rawZ) < 450);
+
+  u8g2.firstPage();
+  do {
+    // 1. Top Header: Target vs Live Temperature (Keep eyes on the heat!)
+    u8g2.setFont(u8g2_font_6x10_tf);
+    u8g2.setCursor(0, 0 + SCREEN_OFFSET);
+    u8g2.printf("SET:%dC", SetTemp);
+
+    u8g2.setCursor(44, 0 + SCREEN_OFFSET);
+    u8g2.print(F("[INSERT]"));
+
+    u8g2.setCursor(96, 0 + SCREEN_OFFSET);
+    if (!TipIsPresent) u8g2.print(F("ERR"));
+    else u8g2.printf("%03dC", ShowTemp);
+
+    // 2. Fixed Left Reference Line & Notch (X: 10 to 42, Y: 34)
+    u8g2.drawHLine(10, 34 + SCREEN_OFFSET, 32);
+    u8g2.drawVLine(10, 30 + SCREEN_OFFSET, 9);
+
+    // 3. Fixed Right Reference Line & Notch (X: 86 to 118, Y: 34)
+    u8g2.drawHLine(86, 34 + SCREEN_OFFSET, 32);
+    u8g2.drawVLine(117, 30 + SCREEN_OFFSET, 9);
+
+    // 4. Center Dynamic Indicator Line (X: 46 to 82)
+    int8_t centerY = 34 + pitchOffset + SCREEN_OFFSET;
+    int8_t yLeft = centerY - rollTilt;
+    int8_t yRight = centerY + rollTilt;
+
+    if (isVertical) {
+      // SNAP TO PERFECT: Draws one continuous unbroken horizontal line
+      u8g2.drawHLine(10, 34 + SCREEN_OFFSET, 108);
+
+      // Bottom Status: Confirmed Vertical
+      u8g2.setFont(u8g2_font_7x14B_tr);
+      u8g2.drawStr(22, 60 + SCREEN_OFFSET, "* 90 PERFECT *");
+    } else {
+      // Dynamic center line tilts and moves up/down
+      u8g2.drawLine(46, yLeft, 82, yRight);
+      u8g2.drawVLine(64, centerY - 3, 7); // Center reticle pip
+
+      // Bottom Status: Leveling guide
+      u8g2.setFont(u8g2_font_6x10_tf);
+      u8g2.drawStr(34, 60 + SCREEN_OFFSET, "ALIGN LEVEL");
+    }
+  } while (u8g2.nextPage());
 }
 
 void beep() {
