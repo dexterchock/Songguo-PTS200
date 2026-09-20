@@ -200,7 +200,7 @@ void setup() {
     Serial.println("Accelerometer not detected.");
   }
 
-  // 9. Splash screen hold time
+  // 9. Splash screen hold time (allows charger to stabilize voltage)
   delay(600);
 
   // 10. Measure true, settled supply voltage & initial tip presence
@@ -269,7 +269,7 @@ void ROTARYCheck() {
     if (digitalRead(BUTTON_PIN) == c) {
       buttonmillis = millis();
 
-      // If already in Level Mode, clicking the center button exits back to main screen
+      // If already in Level Mode, clicking center button exits back to main screen
       if (inLevelMode) {
         inLevelMode = false;
         beep();
@@ -278,25 +278,35 @@ void ROTARYCheck() {
         return;
       }
 
-      // Check how long the button is held
-      while ((!digitalRead(BUTTON_PIN)) && ((millis() - buttonmillis) < 5000)) {
+      // Check button hold duration with immediate trigger at 2.5 seconds
+      bool levelTriggered = false;
+      while (!digitalRead(BUTTON_PIN)) {
         delay(10);
+        if ((millis() - buttonmillis) >= 2500) {
+          // REACHED 2.5s WHILE HOLDING: Activate Level Mode immediately!
+          inLevelMode = true;
+          levelTriggered = true;
+          beep();
+          beep();
+          // Wait for user to release so it doesn't immediately exit
+          while (!digitalRead(BUTTON_PIN)) delay(10);
+          break;
+        }
+      }
+
+      if (levelTriggered) {
+        c0 = digitalRead(BUTTON_PIN);
+        return;
       }
 
       uint32_t pressDuration = millis() - buttonmillis;
 
-      if (pressDuration >= 5000) {
-        // HELD FOR >= 5 SECONDS: Activate Heat-Set 90° Level Mode!
-        inLevelMode = true;
-        beep();
-        beep();
-        while (!digitalRead(BUTTON_PIN)) delay(10);
-      } else if (pressDuration >= 500) {
-        // HELD FOR 0.5s - 5s: Open Settings Menu
+      if (pressDuration >= 500) {
+        // HELD FOR 0.5s - 2.5s: Open Settings Menu on release
         beep();
         SetupScreen();
       } else {
-        // SHORT PRESS: Handle Unlock / Boost / Off
+        // SHORT PRESS (< 0.5s): Handle Unlock / Boost / Off
         beep();
         if (inLockMode) {
           inLockMode = false;
@@ -502,7 +512,7 @@ void Thermostat() {
 }
 
 // ----------------------------------------------------------------------------
-// 90° VERTICAL SPIRIT LEVEL HUD (CLEAN DESIGN)
+// 90° VERTICAL SPIRIT LEVEL HUD (CLEAN DESIGN, XYZ DEPTH & ROLL)
 // ----------------------------------------------------------------------------
 void LevelScreen() {
   int16_t rawX = accel.getRawX();
@@ -510,18 +520,16 @@ void LevelScreen() {
   int16_t rawZ = accel.getRawZ();
 
   // Determine shaft orientation dynamically:
-  // Whichever axis has > 8000 counts is pointing down with gravity!
-  int16_t tiltPitch = 0;
+  // Whichever axis has > 8000 counts is pointing down with gravity
   int16_t tiltRoll = 0;
+  int16_t tiltPitch = 0;
   int16_t shaftVal = 0;
 
   if (abs(rawX) > abs(rawY)) {
-    // X is along the shaft
     shaftVal = rawX;
     tiltRoll = rawY;
     tiltPitch = rawZ;
   } else {
-    // Y is along the shaft
     shaftVal = rawY;
     tiltRoll = rawX;
     tiltPitch = rawZ;
@@ -532,12 +540,11 @@ void LevelScreen() {
     tiltPitch = -tiltPitch;
   }
 
-  // Pitch moves center line UP/DOWN, Roll tilts center line
-  int8_t pitchOffset = constrain(tiltPitch / 150, -12, 12);
-  int8_t rollAngle   = constrain(tiltRoll / 180, -8, 8);
+  // Y-Axis Rotation: Left/Right Roll tilts the center line angle
+  int8_t rollAngle = constrain(tiltRoll / 180, -9, 9);
 
-  // Perpendicular threshold: shaft has gravity (>9000), tilt axes are near 0 (<500 = ~1.5°)
-  bool isVertical = (abs(shaftVal) > 9000) && (abs(tiltRoll) < 500) && (abs(tiltPitch) < 500);
+  // Perpendicular threshold: shaft pointing down (>9000 counts), both tilts near 0 (<450 = ~1.5°)
+  bool isVertical = (abs(shaftVal) > 9000) && (abs(tiltRoll) < 450) && (abs(tiltPitch) < 450);
 
   u8g2.firstPage();
   do {
@@ -564,38 +571,67 @@ void LevelScreen() {
     u8g2.setCursor(128 - str_width, 0 + SCREEN_OFFSET);
     u8g2.print(status_str);
 
-    // 2. CENTER: 3 Level Lines replacing center numbers (Y center = 31)
-    const int8_t baseY = 31 + SCREEN_OFFSET;
+    // 2. CENTER: 3 Level Lines (Base Y = 32)
+    const int8_t baseY = 32 + SCREEN_OFFSET;
 
-    // Left Reference Line & Notch (X: 14 to 44)
-    u8g2.drawHLine(14, baseY, 30);
-    u8g2.drawVLine(14, baseY - 3, 7);
+    // Fixed 2px thick Left reference line (X: 14 to 44)
+    u8g2.drawHLine(14, baseY, 31);
+    u8g2.drawHLine(14, baseY + 1, 31);
+    u8g2.drawVLine(14, baseY - 3, 8); // outer notch
 
-    // Right Reference Line & Notch (X: 84 to 114)
-    u8g2.drawHLine(84, baseY, 30);
-    u8g2.drawVLine(114, baseY - 3, 7);
+    // Fixed 2px thick Right reference line (X: 84 to 114)
+    u8g2.drawHLine(84, baseY, 31);
+    u8g2.drawHLine(84, baseY + 1, 31);
+    u8g2.drawVLine(114, baseY - 3, 8); // outer notch
 
-    // Center Dynamic Line (X: 48 to 80)
+    // Center Line: Fixed horizontally between X: 48 and X: 80 (Does NOT slide left/right!)
     if (isVertical) {
-      // SNAPS FLAT: Draws one continuous unbroken horizontal line across the screen!
+      // PERFECT 90° VERTICAL: Connects seamlessly into one uniform 2px line!
       u8g2.drawHLine(14, baseY, 101);
+      u8g2.drawHLine(14, baseY + 1, 101);
     } else {
-      // Moves up/down and tilts with iron orientation
-      int8_t centerY = baseY + pitchOffset;
-      int8_t yLeft   = centerY - rollAngle;
-      int8_t yRight  = centerY + rollAngle;
-      u8g2.drawLine(48, yLeft, 80, yRight);
+      // Roll tilts the line left/right
+      int8_t yL = baseY - rollAngle;
+      int8_t yR = baseY + rollAngle;
+
+      // Pitch (X-Axis) modulates thickness:
+      // Tilted further from user -> thinner (1px or dotted)
+      // Tilted nearer to user -> thicker (3px, 4px, 5px)
+      if (tiltPitch < -1100) {
+        // Tilted far away: Dotted/Dashed 1px line
+        for (int8_t x = 48; x <= 80; x += 3) {
+          int8_t y = yL + (int16_t)(yR - yL) * (x - 48) / 32;
+          u8g2.drawPixel(x, y);
+        }
+      } else if (tiltPitch < -450) {
+        // Tilted slightly away: Thin 1px line
+        u8g2.drawLine(48, yL, 80, yR);
+      } else if (tiltPitch <= 450) {
+        // Pitch is centered: 2px line (matches left & right reference lines)
+        u8g2.drawLine(48, yL, 80, yR);
+        u8g2.drawLine(48, yL + 1, 80, yR + 1);
+      } else if (tiltPitch <= 1200) {
+        // Tilted nearer: 3px thick line
+        u8g2.drawLine(48, yL - 1, 80, yR - 1);
+        u8g2.drawLine(48, yL,     80, yR);
+        u8g2.drawLine(48, yL + 1, 80, yR + 1);
+      } else {
+        // Tilted much nearer: Heavy 5px bold bar
+        for (int8_t t = -2; t <= 2; t++) {
+          u8g2.drawLine(48, yL + t, 80, yR + t);
+        }
+      }
     }
 
-    // 3. BOTTOM ROW: Live Current Tip Temperature (Clean & Centered)
+    // 3. BOTTOM ROW: Live Current Tip Temperature positioned on the RIGHT (clean, unblocked)
     u8g2.setFont(u8g2_font_unifont_t_chinese3);
     u8g2.setFontPosTop();
-    char tempBuf[16];
-    if (!TipIsPresent || ShowTemp > 450) snprintf(tempBuf, sizeof(tempBuf), "--- C");
-    else snprintf(tempBuf, sizeof(tempBuf), "%03d C", ShowTemp);
+    char tempBuf[12];
+    if (!TipIsPresent || ShowTemp > 450) snprintf(tempBuf, sizeof(tempBuf), "---C");
+    else snprintf(tempBuf, sizeof(tempBuf), "%03dC", ShowTemp);
 
     uint16_t tw = u8g2.getUTF8Width(tempBuf);
-    u8g2.setCursor((128 - tw) / 2, 48 + SCREEN_OFFSET);
+    u8g2.setCursor(128 - tw, 48 + SCREEN_OFFSET);
     u8g2.print(tempBuf);
 
   } while (u8g2.nextPage());
@@ -710,7 +746,7 @@ void SetupScreen() {
           u8g2.drawUTF8(0, 24 + SCREEN_OFFSET, "Switching...");
           u8g2.sendBuffer();
           delay(400);
-          ESP.restart(); // Forces charger to cleanly negotiate new voltage from 5V
+          ESP.restart(); // Clean handshake reset from 5V
         }
       } break;
       case 6: QCEnable = MenuScreen(QCItems, sizeof(QCItems), QCEnable); break;
