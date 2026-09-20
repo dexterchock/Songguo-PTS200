@@ -200,7 +200,7 @@ void setup() {
     Serial.println("Accelerometer not detected.");
   }
 
-  // 9. Splash screen hold time (allows charger to stabilize voltage)
+  // 9. Splash screen hold time
   delay(600);
 
   // 10. Measure true, settled supply voltage & initial tip presence
@@ -278,18 +278,23 @@ void ROTARYCheck() {
         return;
       }
 
-      // Check button hold duration with immediate trigger at 2.5 seconds
+      // Check button hold duration with immediate live trigger at 2.5 seconds
       bool levelTriggered = false;
       while (!digitalRead(BUTTON_PIN)) {
         delay(10);
         if ((millis() - buttonmillis) >= 2500) {
-          // REACHED 2.5s WHILE HOLDING: Activate Level Mode immediately!
+          // REACHED 2.5s WHILE HOLDING: Immediately activate & render Level Mode live!
           inLevelMode = true;
           levelTriggered = true;
           beep();
           beep();
-          // Wait for user to release so it doesn't immediately exit
-          while (!digitalRead(BUTTON_PIN)) delay(10);
+
+          // Render live while finger is still pressing the button!
+          while (!digitalRead(BUTTON_PIN)) {
+            Thermostat();
+            LevelScreen();
+            delay(15);
+          }
           break;
         }
       }
@@ -512,7 +517,7 @@ void Thermostat() {
 }
 
 // ----------------------------------------------------------------------------
-// 90° VERTICAL SPIRIT LEVEL HUD (CLEAN DESIGN, XYZ DEPTH & ROLL)
+// 90° VERTICAL SPIRIT LEVEL HUD (CLEAN EDGE-TO-EDGE RETICLE)
 // ----------------------------------------------------------------------------
 void LevelScreen() {
   int16_t rawX = accel.getRawX();
@@ -571,59 +576,57 @@ void LevelScreen() {
     u8g2.setCursor(128 - str_width, 0 + SCREEN_OFFSET);
     u8g2.print(status_str);
 
-    // 2. CENTER: 3 Level Lines (Base Y = 32)
+    // 2. CENTER: Clean Edge-to-Edge Level Lines (Base Y = 32, no "T" notches)
     const int8_t baseY = 32 + SCREEN_OFFSET;
 
-    // Fixed 2px thick Left reference line (X: 14 to 44)
-    u8g2.drawHLine(14, baseY, 31);
-    u8g2.drawHLine(14, baseY + 1, 31);
-    u8g2.drawVLine(14, baseY - 3, 8); // outer notch
+    // Left Line: Extends from very edge (X: 0 to 42)
+    u8g2.drawHLine(0, baseY, 43);
+    u8g2.drawHLine(0, baseY + 1, 43);
 
-    // Fixed 2px thick Right reference line (X: 84 to 114)
-    u8g2.drawHLine(84, baseY, 31);
-    u8g2.drawHLine(84, baseY + 1, 31);
-    u8g2.drawVLine(114, baseY - 3, 8); // outer notch
+    // Right Line: Extends to very edge (X: 86 to 127)
+    u8g2.drawHLine(86, baseY, 42);
+    u8g2.drawHLine(86, baseY + 1, 42);
 
-    // Center Line: Fixed horizontally between X: 48 and X: 80 (Does NOT slide left/right!)
+    // Center Dynamic Line: Centered horizontally between X: 46 and X: 82
     if (isVertical) {
-      // PERFECT 90° VERTICAL: Connects seamlessly into one uniform 2px line!
-      u8g2.drawHLine(14, baseY, 101);
-      u8g2.drawHLine(14, baseY + 1, 101);
+      // PERFECT 90° VERTICAL: Connects from edge to edge into one solid bar!
+      u8g2.drawHLine(0, baseY, 128);
+      u8g2.drawHLine(0, baseY + 1, 128);
     } else {
       // Roll tilts the line left/right
       int8_t yL = baseY - rollAngle;
       int8_t yR = baseY + rollAngle;
 
-      // Pitch (X-Axis) modulates thickness:
-      // Tilted further from user -> thinner (1px or dotted)
-      // Tilted nearer to user -> thicker (3px, 4px, 5px)
+      // Pitch modulates thickness (X-Axis depth):
+      // Further -> thinner (1px or dotted)
+      // Nearer -> thicker (3px, 4px, 5px)
       if (tiltPitch < -1100) {
-        // Tilted far away: Dotted/Dashed 1px line
-        for (int8_t x = 48; x <= 80; x += 3) {
-          int8_t y = yL + (int16_t)(yR - yL) * (x - 48) / 32;
+        // Tilted far away: Dotted line
+        for (int8_t x = 46; x <= 82; x += 3) {
+          int8_t y = yL + (int16_t)(yR - yL) * (x - 46) / 36;
           u8g2.drawPixel(x, y);
         }
       } else if (tiltPitch < -450) {
-        // Tilted slightly away: Thin 1px line
-        u8g2.drawLine(48, yL, 80, yR);
+        // Tilted slightly away: 1px thin line
+        u8g2.drawLine(46, yL, 82, yR);
       } else if (tiltPitch <= 450) {
-        // Pitch is centered: 2px line (matches left & right reference lines)
-        u8g2.drawLine(48, yL, 80, yR);
-        u8g2.drawLine(48, yL + 1, 80, yR + 1);
+        // Pitch centered: 2px line (exact match to left and right reference lines)
+        u8g2.drawLine(46, yL, 82, yR);
+        u8g2.drawLine(46, yL + 1, 82, yR + 1);
       } else if (tiltPitch <= 1200) {
-        // Tilted nearer: 3px thick line
-        u8g2.drawLine(48, yL - 1, 80, yR - 1);
-        u8g2.drawLine(48, yL,     80, yR);
-        u8g2.drawLine(48, yL + 1, 80, yR + 1);
+        // Tilted nearer: 3px thick
+        u8g2.drawLine(46, yL - 1, 82, yR - 1);
+        u8g2.drawLine(46, yL,     82, yR);
+        u8g2.drawLine(46, yL + 1, 82, yR + 1);
       } else {
-        // Tilted much nearer: Heavy 5px bold bar
+        // Tilted much nearer: 5px heavy bar
         for (int8_t t = -2; t <= 2; t++) {
-          u8g2.drawLine(48, yL + t, 80, yR + t);
+          u8g2.drawLine(46, yL + t, 82, yR + t);
         }
       }
     }
 
-    // 3. BOTTOM ROW: Live Current Tip Temperature positioned on the RIGHT (clean, unblocked)
+    // 3. BOTTOM ROW: Live Current Tip Temperature on the RIGHT (clean & unblocked)
     u8g2.setFont(u8g2_font_unifont_t_chinese3);
     u8g2.setFontPosTop();
     char tempBuf[12];
