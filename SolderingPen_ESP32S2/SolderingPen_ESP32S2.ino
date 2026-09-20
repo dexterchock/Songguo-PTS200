@@ -130,7 +130,7 @@ void setup() {
   pinMode(BUTTON_N_PIN, INPUT_PULLUP);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
 
-  // 3. Load EEPROM configuration (to know orientation before turning on display)
+  // 3. Load EEPROM configuration
   if (!init_EEPROM()) {
     Serial.println("EEPROM initialization failed!");
     while (true) { delay(1000); }
@@ -173,7 +173,7 @@ void setup() {
   adc_sensor.attach(SENSOR_PIN);
   adc_vin.attach(VIN_PIN);
 
-  // 7. Initiate USB-PD Handshake (Direct request to saved VoltageValue)
+  // 7. Initiate USB-PD Handshake
   pinMode(PD_CFG_0, OUTPUT);
   pinMode(PD_CFG_1, OUTPUT);
   pinMode(PD_CFG_2, OUTPUT);
@@ -200,12 +200,21 @@ void setup() {
   // 9. Splash screen hold time (allows charger to stabilize voltage)
   delay(600);
 
-  // 10. Measure true, settled supply voltage & tip temp
+  // 10. Measure true, settled supply voltage & check initial tip presence
   Vin = getVIN();
   SetTemp = DefaultTemp;
   RawTemp = denoiseAnalog();
   calculateTemp();
-  ShowTemp = CurrentTemp;
+
+  // Instant check: if powered on without a tip inserted
+  if (RawTemp > 450.0) {
+    TipIsPresent = false;
+    ShowTemp = 999;
+    CurrentTemp = 999.0;
+  } else {
+    TipIsPresent = true;
+    ShowTemp = CurrentTemp;
+  }
 
   // 11. Controls & Rotary
   ctrl.SetOutputLimits(0, 255);
@@ -218,7 +227,7 @@ void setup() {
   ChipTemp = getChipTemp();
   lastSENSORTmp = getChipTemp();
 
-  // Draw main screen with true settled voltage, then sound ready beeps
+  // Draw main screen, then sound ready beeps
   MainScreen();
 
   sleepmillis = millis();
@@ -361,8 +370,6 @@ void SENSORCheck() {
 
   // Turn heater off during ADC sampling
   ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
-  
-  // Unified 5ms settle delay: completely discharges OpAmp filter
   delayMicroseconds(TIME2SETTLE);
 
   double temp = denoiseAnalog();
@@ -372,13 +379,27 @@ void SENSORCheck() {
     SensorCounter = 0;
   }
 
-  // Natural exponential smoothing (no artificial ADC gates)
-  RawTemp += (temp - RawTemp) * SMOOTHIE;
-  calculateTemp();
+  // --- RATE-OF-RISE (dT/dt) INSTANT DISCONNECT DETECTION ---
+  // A real metal tip cannot physically jump more than +50°C in a single 70ms cycle.
+  // If it jumps by >50°C or exceeds 480°C, the tip has been unplugged.
+  bool suddenDisconnect = (temp > 500.0) || (temp > 400.0 && (temp - RawTemp) > 50.0);
 
-  if ((ShowTemp != Setpoint) || (abs(ShowTemp - CurrentTemp) > 5))
-    ShowTemp = CurrentTemp;
-  if (abs(ShowTemp - Setpoint) <= 1) ShowTemp = Setpoint;
+  if (suddenDisconnect) {
+    // Instant bypass of the smoothing filter: immediate error display!
+    TipIsPresent = false;
+    ShowTemp = 999;
+    CurrentTemp = 999.0;
+    RawTemp = temp;
+    ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
+  } else {
+    // Normal operation: smooth filter keeps the display steady
+    RawTemp += (temp - RawTemp) * SMOOTHIE;
+    calculateTemp();
+
+    if ((ShowTemp != Setpoint) || (abs(ShowTemp - CurrentTemp) > 5))
+      ShowTemp = CurrentTemp;
+    if (abs(ShowTemp - Setpoint) <= 1) ShowTemp = Setpoint;
+  }
 
   gap = abs(SetTemp - CurrentTemp);
   if (gap < 5) {
@@ -389,35 +410,33 @@ void SENSORCheck() {
     isWorky = false;
   }
 
-  // Natural tip detection: when unplugged, RawTemp naturally climbs > 500
-  if (ShowTemp > 500) TipIsPresent = false;
-  if (!TipIsPresent && (ShowTemp < 500)) {
+  // Detect when tip is re-inserted (reading drops back down to normal range < 400°C)
+  if (!TipIsPresent && (temp < 400.0)) {
     ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
     beep();
     TipIsPresent = true;
+    RawTemp = temp;
+    calculateTemp();
+    ShowTemp = CurrentTemp;
     ChangeTipScreen();
     if (!update_EEPROM()) Serial.println("EEPROM update failed on tip change");
     handleMoved = true;
-    RawTemp = denoiseAnalog();
     c0 = LOW;
     setRotary(TEMP_MIN, TEMP_MAX, TEMP_STEP, SetTemp);
   }
 }
 
-// Clean, natural continuous extrapolation (no artificial 950 cap)
 void calculateTemp() {
   if (RawTemp < 200) {
     CurrentTemp = fmap(RawTemp, 0, 200, 15, CalTemp[CurrentTip][0]);
   } else if (RawTemp < 280) {
     CurrentTemp = fmap(RawTemp, 200, 280, CalTemp[CurrentTip][0], CalTemp[CurrentTip][1]);
   } else {
-    // Extrapolates cleanly all the way up to 1000 when tip is unplugged
     CurrentTemp = fmap(RawTemp, 280, 360, CalTemp[CurrentTip][1], CalTemp[CurrentTip][2]);
   }
 }
 
 void Thermostat() {
-  // If tip is removed (> 500) or locked/off, shut heater OFF immediately
   if (CurrentTemp > 500.0 || inOffMode || inLockMode) {
     Setpoint = 0;
     Output = 0;
@@ -444,7 +463,6 @@ void Thermostat() {
     ctrl.SetOutputLimits(255 - limit, 255);
     ctrl.Compute();
   } else {
-    // Robust, zero-jitter direct control
     if ((CurrentTemp + 0.5) < Setpoint)
       Output = 0;
     else
@@ -564,7 +582,7 @@ void SetupScreen() {
           u8g2.drawUTF8(0, 24 + SCREEN_OFFSET, "Switching...");
           u8g2.sendBuffer();
           delay(400);
-          ESP.restart(); // Forces clean USB-PD handshake from 5V
+          ESP.restart(); // Forces charger to start fresh from 5V
         }
       } break;
       case 6: QCEnable = MenuScreen(QCItems, sizeof(QCItems), QCEnable); break;
