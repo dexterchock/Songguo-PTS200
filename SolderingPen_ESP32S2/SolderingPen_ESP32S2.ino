@@ -173,7 +173,7 @@ void setup() {
   adc_sensor.attach(SENSOR_PIN);
   adc_vin.attach(VIN_PIN);
 
-  // 7. Initiate USB-PD Handshake
+  // 7. Initiate USB-PD Handshake (Direct request to saved VoltageValue)
   pinMode(PD_CFG_0, OUTPUT);
   pinMode(PD_CFG_1, OUTPUT);
   pinMode(PD_CFG_2, OUTPUT);
@@ -200,14 +200,15 @@ void setup() {
   // 9. Splash screen hold time (allows charger to stabilize voltage)
   delay(600);
 
-  // 10. Measure true, settled supply voltage & check initial tip presence
+  // 10. Measure true, settled supply voltage & initial tip presence
   Vin = getVIN();
   SetTemp = DefaultTemp;
   RawTemp = denoiseAnalog();
   calculateTemp();
 
-  // Instant check: if powered on without a tip inserted
-  if (RawTemp > 450.0) {
+  // Instant check on boot: adaptive threshold works on both 5V USB and 15V/20V PD
+  double bootThreshold = (Vin < 7000) ? 280.0 : 470.0;
+  if (RawTemp > bootThreshold) {
     TipIsPresent = false;
     ShowTemp = 999;
     CurrentTemp = 999.0;
@@ -227,7 +228,7 @@ void setup() {
   ChipTemp = getChipTemp();
   lastSENSORTmp = getChipTemp();
 
-  // Draw main screen, then sound ready beeps
+  // Draw main screen with true settled voltage, then sound ready beeps
   MainScreen();
 
   sleepmillis = millis();
@@ -379,20 +380,20 @@ void SENSORCheck() {
     SensorCounter = 0;
   }
 
-  // --- RATE-OF-RISE (dT/dt) INSTANT DISCONNECT DETECTION ---
-  // A real metal tip cannot physically jump more than +50°C in a single 70ms cycle.
-  // If it jumps by >50°C or exceeds 480°C, the tip has been unplugged.
-  bool suddenDisconnect = (temp > 500.0) || (temp > 400.0 && (temp - RawTemp) > 50.0);
+  // --- ADAPTIVE OPEN-CIRCUIT THRESHOLD ---
+  // On weak 5V laptop USB (<7V): max operating temp is ~120°C; unplugged saturation is ~350-420°C -> threshold 280°C.
+  // On fast chargers (>=7V): max operating temp is 450°C; unplugged saturation is 1000°C -> threshold 470°C.
+  double openCircuitThreshold = (Vin < 7000) ? 280.0 : 470.0;
 
-  if (suddenDisconnect) {
-    // Instant bypass of the smoothing filter: immediate error display!
+  if (temp > openCircuitThreshold) {
+    // TIP IS UNPLUGGED: Bypass the slow smoothing filter immediately!
     TipIsPresent = false;
-    ShowTemp = 999;
-    CurrentTemp = 999.0;
     RawTemp = temp;
+    CurrentTemp = 999.0;
+    ShowTemp = 999;
     ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
   } else {
-    // Normal operation: smooth filter keeps the display steady
+    // TIP IS PLUGGED IN: Smooth filter keeps the display calm and steady
     RawTemp += (temp - RawTemp) * SMOOTHIE;
     calculateTemp();
 
@@ -410,8 +411,8 @@ void SENSORCheck() {
     isWorky = false;
   }
 
-  // Detect when tip is re-inserted (reading drops back down to normal range < 400°C)
-  if (!TipIsPresent && (temp < 400.0)) {
+  // TIP RE-INSERTED: When tip is inserted, reading drops back safely below the threshold
+  if (!TipIsPresent && (temp < openCircuitThreshold)) {
     ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
     beep();
     TipIsPresent = true;
@@ -437,7 +438,7 @@ void calculateTemp() {
 }
 
 void Thermostat() {
-  if (CurrentTemp > 500.0 || inOffMode || inLockMode) {
+  if (!TipIsPresent || inOffMode || inLockMode) {
     Setpoint = 0;
     Output = 0;
     ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
@@ -463,6 +464,7 @@ void Thermostat() {
     ctrl.SetOutputLimits(255 - limit, 255);
     ctrl.Compute();
   } else {
+    // Robust, zero-jitter direct control
     if ((CurrentTemp + 0.5) < Setpoint)
       Output = 0;
     else
@@ -514,7 +516,7 @@ void MainScreen() {
     u8g2.setFont(PTS200_16);
 
     const char *status_str = txt_hold[language];
-    if (ShowTemp > 500) status_str = txt_error[language];
+    if (!TipIsPresent || ShowTemp > 450) status_str = txt_error[language];
     else if (inOffMode || inLockMode) status_str = txt_off[language];
     else if (inSleepMode) status_str = txt_sleep[language];
     else if (inBoostMode) status_str = txt_boost[language];
@@ -545,12 +547,12 @@ void MainScreen() {
       u8g2.setFont(u8g2_font_freedoomr25_tn);
       u8g2.setFontPosTop();
       u8g2.setCursor(37, 18);
-      if (ShowTemp > 500) u8g2.print(F("---")); else u8g2.printf("%03d", ShowTemp);
+      if (!TipIsPresent || ShowTemp > 450) u8g2.print(F("---")); else u8g2.printf("%03d", ShowTemp);
     } else {
       u8g2.setFont(u8g2_font_fub42_tn);
       u8g2.setFontPosTop();
       u8g2.setCursor(15, 20);
-      if (ShowTemp > 500) u8g2.print(F("---")); else u8g2.printf("%03d", ShowTemp);
+      if (!TipIsPresent || ShowTemp > 450) u8g2.print(F("---")); else u8g2.printf("%03d", ShowTemp);
     }
   } while (u8g2.nextPage());
 }
@@ -582,7 +584,7 @@ void SetupScreen() {
           u8g2.drawUTF8(0, 24 + SCREEN_OFFSET, "Switching...");
           u8g2.sendBuffer();
           delay(400);
-          ESP.restart(); // Forces charger to start fresh from 5V
+          ESP.restart(); // Clean handshake reset from 5V
         }
       } break;
       case 6: QCEnable = MenuScreen(QCItems, sizeof(QCItems), QCEnable); break;
