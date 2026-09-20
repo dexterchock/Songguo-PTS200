@@ -74,7 +74,7 @@ bool inLockMode = true;
 bool inSleepMode = false;
 bool inOffMode = false;
 bool inBoostMode = false;
-bool inLevelMode = false; // Vertical spirit level mode
+bool inLevelMode = false; // 90° vertical spirit level mode
 bool isWorky = true;
 bool beepIfWorky = true;
 bool TipIsPresent = true;
@@ -161,7 +161,7 @@ void setup() {
   u8g2.enableUTF8Print();
   u8g2.setDisplayRotation(hand_side ? U8G2_R3 : U8G2_R1);
 
-  // 5. Clean Minimal DEXTER Splash Screen
+  // 5. Clean, Minimal DEXTER Splash Screen
   u8g2.firstPage();
   do {
     u8g2.setFont(u8g2_font_logisoso24_tr);
@@ -203,7 +203,7 @@ void setup() {
   // 9. Splash screen hold time
   delay(600);
 
-  // 10. Measure settled supply voltage & initial tip state
+  // 10. Measure true, settled supply voltage & initial tip presence
   Vin = getVIN();
   SetTemp = DefaultTemp;
   RawTemp = denoiseAnalog();
@@ -269,7 +269,7 @@ void ROTARYCheck() {
     if (digitalRead(BUTTON_PIN) == c) {
       buttonmillis = millis();
 
-      // If already in Level Mode, a single press exits back to main screen
+      // If already in Level Mode, clicking the center button exits back to main screen
       if (inLevelMode) {
         inLevelMode = false;
         beep();
@@ -286,11 +286,11 @@ void ROTARYCheck() {
       uint32_t pressDuration = millis() - buttonmillis;
 
       if (pressDuration >= 5000) {
-        // HELD FOR >= 5 SECONDS: Activate Heat-Set Level Mode!
+        // HELD FOR >= 5 SECONDS: Activate Heat-Set 90° Level Mode!
         inLevelMode = true;
         beep();
         beep();
-        while (!digitalRead(BUTTON_PIN)) delay(10); // Wait for release
+        while (!digitalRead(BUTTON_PIN)) delay(10);
       } else if (pressDuration >= 500) {
         // HELD FOR 0.5s - 5s: Open Settings Menu
         beep();
@@ -438,7 +438,7 @@ void SENSORCheck() {
     isWorky = false;
   }
 
-  // Re-insertion detection
+  // Tip re-insertion detection
   if (!TipIsPresent && (temp < openCircuitThreshold)) {
     ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
     beep();
@@ -502,68 +502,102 @@ void Thermostat() {
 }
 
 // ----------------------------------------------------------------------------
-// 90° VERTICAL SPIRIT LEVEL HUD (HEAT INSERT MODE)
+// 90° VERTICAL SPIRIT LEVEL HUD (CLEAN DESIGN)
 // ----------------------------------------------------------------------------
 void LevelScreen() {
-  // Read live gravity tilt on transverse axes
   int16_t rawX = accel.getRawX();
+  int16_t rawY = accel.getRawY();
   int16_t rawZ = accel.getRawZ();
 
-  // If orientation is flipped for Left Hand mode, mirror the X axis
-  if (hand_side) rawX = -rawX;
+  // Determine shaft orientation dynamically:
+  // Whichever axis has > 8000 counts is pointing down with gravity!
+  int16_t tiltPitch = 0;
+  int16_t tiltRoll = 0;
+  int16_t shaftVal = 0;
 
-  // Scale raw tilt into pixel offsets (16384 counts = 1G tilt)
-  // Pitch error moves the center line UP/DOWN
-  int8_t pitchOffset = constrain(rawZ / 180, -18, 18);
-  // Roll error tilts the center line
-  int8_t rollTilt = constrain(rawX / 220, -10, 10);
+  if (abs(rawX) > abs(rawY)) {
+    // X is along the shaft
+    shaftVal = rawX;
+    tiltRoll = rawY;
+    tiltPitch = rawZ;
+  } else {
+    // Y is along the shaft
+    shaftVal = rawY;
+    tiltRoll = rawX;
+    tiltPitch = rawZ;
+  }
 
-  // Check if perfectly perpendicular (within ~1.5° window)
-  bool isVertical = (abs(rawX) < 450) && (abs(rawZ) < 450);
+  if (hand_side) {
+    tiltRoll = -tiltRoll;
+    tiltPitch = -tiltPitch;
+  }
+
+  // Pitch moves center line UP/DOWN, Roll tilts center line
+  int8_t pitchOffset = constrain(tiltPitch / 150, -12, 12);
+  int8_t rollAngle   = constrain(tiltRoll / 180, -8, 8);
+
+  // Perpendicular threshold: shaft has gravity (>9000), tilt axes are near 0 (<500 = ~1.5°)
+  bool isVertical = (abs(shaftVal) > 9000) && (abs(tiltRoll) < 500) && (abs(tiltPitch) < 500);
 
   u8g2.firstPage();
   do {
-    // 1. Top Header: Target vs Live Temperature (Keep eyes on the heat!)
-    u8g2.setFont(u8g2_font_6x10_tf);
-    u8g2.setCursor(0, 0 + SCREEN_OFFSET);
-    u8g2.printf("SET:%dC", SetTemp);
+    // 1. TOP ROW: Detailed Top UI Layout (Preserved from MainScreen)
+    u8g2.setFont(PTS200_16);
+    u8g2.setFontPosTop();
+    u8g2.drawUTF8(0, 0 + SCREEN_OFFSET, txt_set_temp[language]);
+    u8g2.setCursor(40, 0 + SCREEN_OFFSET);
+    u8g2.setFont(u8g2_font_unifont_t_chinese3);
 
-    u8g2.setCursor(44, 0 + SCREEN_OFFSET);
-    u8g2.print(F("[INSERT]"));
+    uint16_t dispSet = (inOffMode || inLockMode) ? SetTemp : (inSleepMode ? SleepTemp : (uint16_t)Setpoint);
+    u8g2.print(dispSet);
 
-    u8g2.setCursor(96, 0 + SCREEN_OFFSET);
-    if (!TipIsPresent) u8g2.print(F("ERR"));
-    else u8g2.printf("%03dC", ShowTemp);
+    u8g2.setFont(PTS200_16);
+    const char *status_str = txt_hold[language];
+    if (!TipIsPresent || ShowTemp > 450) status_str = txt_error[language];
+    else if (inOffMode || inLockMode) status_str = txt_off[language];
+    else if (inSleepMode) status_str = txt_sleep[language];
+    else if (inBoostMode) status_str = txt_boost[language];
+    else if (isWorky) status_str = txt_worky[language];
+    else if (Output < 180) status_str = txt_on[language];
 
-    // 2. Fixed Left Reference Line & Notch (X: 10 to 42, Y: 34)
-    u8g2.drawHLine(10, 34 + SCREEN_OFFSET, 32);
-    u8g2.drawVLine(10, 30 + SCREEN_OFFSET, 9);
+    uint16_t str_width = u8g2.getUTF8Width(status_str);
+    u8g2.setCursor(128 - str_width, 0 + SCREEN_OFFSET);
+    u8g2.print(status_str);
 
-    // 3. Fixed Right Reference Line & Notch (X: 86 to 118, Y: 34)
-    u8g2.drawHLine(86, 34 + SCREEN_OFFSET, 32);
-    u8g2.drawVLine(117, 30 + SCREEN_OFFSET, 9);
+    // 2. CENTER: 3 Level Lines replacing center numbers (Y center = 31)
+    const int8_t baseY = 31 + SCREEN_OFFSET;
 
-    // 4. Center Dynamic Indicator Line (X: 46 to 82)
-    int8_t centerY = 34 + pitchOffset + SCREEN_OFFSET;
-    int8_t yLeft = centerY - rollTilt;
-    int8_t yRight = centerY + rollTilt;
+    // Left Reference Line & Notch (X: 14 to 44)
+    u8g2.drawHLine(14, baseY, 30);
+    u8g2.drawVLine(14, baseY - 3, 7);
 
+    // Right Reference Line & Notch (X: 84 to 114)
+    u8g2.drawHLine(84, baseY, 30);
+    u8g2.drawVLine(114, baseY - 3, 7);
+
+    // Center Dynamic Line (X: 48 to 80)
     if (isVertical) {
-      // SNAP TO PERFECT: Draws one continuous unbroken horizontal line
-      u8g2.drawHLine(10, 34 + SCREEN_OFFSET, 108);
-
-      // Bottom Status: Confirmed Vertical
-      u8g2.setFont(u8g2_font_7x14B_tr);
-      u8g2.drawStr(22, 60 + SCREEN_OFFSET, "* 90 PERFECT *");
+      // SNAPS FLAT: Draws one continuous unbroken horizontal line across the screen!
+      u8g2.drawHLine(14, baseY, 101);
     } else {
-      // Dynamic center line tilts and moves up/down
-      u8g2.drawLine(46, yLeft, 82, yRight);
-      u8g2.drawVLine(64, centerY - 3, 7); // Center reticle pip
-
-      // Bottom Status: Leveling guide
-      u8g2.setFont(u8g2_font_6x10_tf);
-      u8g2.drawStr(34, 60 + SCREEN_OFFSET, "ALIGN LEVEL");
+      // Moves up/down and tilts with iron orientation
+      int8_t centerY = baseY + pitchOffset;
+      int8_t yLeft   = centerY - rollAngle;
+      int8_t yRight  = centerY + rollAngle;
+      u8g2.drawLine(48, yLeft, 80, yRight);
     }
+
+    // 3. BOTTOM ROW: Live Current Tip Temperature (Clean & Centered)
+    u8g2.setFont(u8g2_font_unifont_t_chinese3);
+    u8g2.setFontPosTop();
+    char tempBuf[16];
+    if (!TipIsPresent || ShowTemp > 450) snprintf(tempBuf, sizeof(tempBuf), "--- C");
+    else snprintf(tempBuf, sizeof(tempBuf), "%03d C", ShowTemp);
+
+    uint16_t tw = u8g2.getUTF8Width(tempBuf);
+    u8g2.setCursor((128 - tw) / 2, 48 + SCREEN_OFFSET);
+    u8g2.print(tempBuf);
+
   } while (u8g2.nextPage());
 }
 
@@ -676,7 +710,7 @@ void SetupScreen() {
           u8g2.drawUTF8(0, 24 + SCREEN_OFFSET, "Switching...");
           u8g2.sendBuffer();
           delay(400);
-          ESP.restart(); // Clean handshake reset from 5V
+          ESP.restart(); // Forces charger to cleanly negotiate new voltage from 5V
         }
       } break;
       case 6: QCEnable = MenuScreen(QCItems, sizeof(QCItems), QCEnable); break;
