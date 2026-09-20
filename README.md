@@ -22,6 +22,7 @@ This is an improved, bug-fixed firmware fork for the **Songguo PTS200** ESP32-S2
 
 ### 3. Display & UI Upgrades
 
+* **Integrated 90° Spirit Level for Heat-Set Inserts:** Holding the center button for 2.5 seconds brings up a dedicated vertical alignment HUD designed specifically for 3D-printing threaded brass inserts. Heating remains fully active in the background. A dynamic 3-line reticle tracks left/right roll (angle) and front/back pitch (line thickness). When held at a perfect 90° perpendicular angle, all lines merge into one continuous edge-to-edge solid bar. A single click exits back to the main screen.
 * **Instant OLED Startup:** Moved display initialization to the very start of `setup()`. The screen turns on within ~30ms of plugging in, eliminating the ~1-second blank screen delay present in the stock firmware.
 * **400kHz Fast I2C Bus:** Upgraded the display and accelerometer I2C clock from 100kHz to 400kHz, reducing display refresh latency from ~35ms down to ~8ms for a much snappier interface and faster control loop.
 * **Correct Standby Target Display:** The top-left corner displays your actual configured target temperature (`SetTemp`) during lock and off modes instead of displaying `Set: 0`.
@@ -44,6 +45,7 @@ This is an improved, bug-fixed firmware fork for the **Songguo PTS200** ESP32-S2
 * **Power Protocols:** Native USB-PD (Power Delivery 3.0) via onboard CH224K sink controller.
 * **Hardware:** ESP32-S2 (FH4) microcontroller, 30V 12A rated P-Channel MOSFET.
 * **Display & UI:** 128x64 SH1107 OLED screen with Simple and Detailed telemetry layouts.
+* **Heat-Set Insert HUD:** Real-time 90° vertical spirit level reticle using the onboard accelerometer while maintaining active tip temperature.
 * **Orientation:** Selectable Left-Hand / Right-Hand screen rotation (180° flip).
 * **Motion & Sleep Detection:** Integrated LIS2DH12 3-axis accelerometer for auto-sleep, auto-off, and wake-on-motion.
 * **Multi-Tip Management:** Up to 8 configurable tip calibration profiles with customizable names.
