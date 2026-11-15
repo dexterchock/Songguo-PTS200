@@ -1,0 +1,14 @@
+.pioenvs
+.piolibdeps
+.clang_complete
+.gcc-flags.json
+.pio
+.pio_core
+.venv
+.pip_cache
+release
+.vscode
+.DS_Store
+.idea
+SolderingPen_ESP32S2/build
+SolderingPen_ESP32S2/.idea
