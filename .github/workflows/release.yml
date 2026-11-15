@@ -1,0 +1,71 @@
+name: Release Firmware
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PlatformIO
+        run: |
+          python -m pip install --upgrade pip
+          pip install platformio
+
+      - name: Build firmware
+        run: pio run
+
+      - name: Package release binaries
+        env:
+          VERSION_TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist
+          cp .pio/build/solderingpen/firmware.bin "dist/PTS200_${VERSION_TAG}_update.bin"
+          python ~/.platformio/packages/tool-esptoolpy/esptool.py \
+            --chip esp32s2 merge_bin \
+            -o "dist/PTS200_${VERSION_TAG}_factory.bin" \
+            --flash_mode keep --flash_freq keep --flash_size keep \
+            0x1000 .pio/build/solderingpen/bootloader.bin \
+            0x8000 .pio/build/solderingpen/partitions.bin \
+            0xe000 ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin \
+            0x10000 .pio/build/solderingpen/firmware.bin
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION_TAG: ${{ github.ref_name }}
+        run: |
+          sed "s/__TAG__/${VERSION_TAG}/g" <<'EOF' > dist/release_notes.md
+          Firmware release continuing from v4.5.3 with bug fixes, stability improvements, and the 90° vertical spirit level HUD.
+
+          ### Changes Included
+          * Fixed Off mode OLED burn in so accelerometer motion ignores `inOffMode` until woken by button press
+          * Fixed sleep self wakeup from piezo `beep()` vibration with a 300 ms post beep blanking window and buffer reset
+          * Fixed live temperature freeze when holding the center button past 2.5s in Spirit Level mode
+          * Raised the main and level screen fault threshold to 500°C to avoid false `ERROR` flashes near `TEMP_MAX`
+          * Fixed `isWorky` target tracking during sleep and boost modes
+          * Fixed `Update FW` MSC mode registering USB events in a tight loop
+
+          ### Binary Files
+          * `PTS200___TAG___update.bin`: Drag and drop onto `ESP32-FWMSC` via `Setup` → `Update FW` for normal upgrades
+          * `PTS200___TAG___factory.bin`: Full merged flash image starting at `0x0000` for fresh flashes or recovery
+          EOF
+          gh release create "$VERSION_TAG" \
+            "dist/PTS200_${VERSION_TAG}_update.bin" \
+            "dist/PTS200_${VERSION_TAG}_factory.bin" \
+            --title "$VERSION_TAG" \
+            --latest \
+            --notes-file dist/release_notes.md
