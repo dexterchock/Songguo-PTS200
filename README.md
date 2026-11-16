@@ -1,6 +1,6 @@
-# Songguo PTS200 Firmware (v5.0.0)
+# Songguo PTS200 Firmware (v5.1.0)
 
-The original Songguo PTS200 repository (`Eddddddddy/Songguo-PTS200`) stopped updating after `v4.5.3`, leaving flash wear, power stability, sleep/off, and sensor bugs unresolved. This standalone repository continues from `v4.5.3` with `v5.0.0`, resolving those hardware and firmware issues and adding a live 90° vertical spirit level HUD for heat set inserts.
+The original Songguo PTS200 repository (`Eddddddddy/Songguo-PTS200`) stopped updating after `v4.5.3`, leaving flash wear, power stability, sleep/off, and sensor bugs unresolved. This standalone repository continues from `v4.5.3` with `v5.x`, resolving those hardware and firmware issues, optimizing CPU/screen responsiveness, and adding a live 90° vertical spirit level HUD for heat set inserts.
 
 <p align="center">
   <img src="docs/images/pts200_hero.svg" alt="Songguo PTS200 hardware with active OLED screen" width="900" />
@@ -45,6 +45,12 @@ The original Songguo PTS200 repository (`Eddddddddy/Songguo-PTS200`) stopped upd
 * **Non Blocking Spirit Level Activation:** Removed the blocking wait loop after the 2.5s hold trigger so temperature measurement continues updating even while keeping the button pressed.
 * **Instant OLED Boot & 400 kHz I2C:** Starts the SH1107 OLED right after reading orientation from EEPROM and runs I2C at 400 kHz for low latency screen refreshes.
 * **Fixed Tight Loop Re Registration in `Update FW`:** Initializes `FirmwareMSC` events and mount once before waiting for exit input.
+* **Screen, CPU & Watchdog Optimizations (`v5.1.0`):**
+  * Skips redundant full frame OLED I2C transfers when screen telemetry is unchanged, caps Level HUD rendering at ~30 Hz, removes duplicate `initDisplay()`, and sets explicit `u8g2.setBusClock(400000)`.
+  * Rate limits LIS2DH12 chip temperature I2C reads to every 250 ms (`accelPresent` failure guarded) and adds `Wire.setTimeOut(50)` recovery.
+  * Overlaps accelerometer polling and `Vin` measurement inside the 5 ms OpAmp settle window and paces `SENSORCheck()` on a steady 50 ms (`20 Hz`) cadence, while keeping sensing and heating active during the 2.5s button hold check.
+  * Lowers CPU clock to `80 MHz` (keeping native USB and 80 MHz APB I2C/ADC/LEDC speeds) and sleeps idle `loop()` cycles to reduce ESP32 S2 handle heat.
+  * Dims OLED contrast in sleep mode, extends auto screen off timing to manual double click Off mode, and adds a 5s `esp_task_wdt` hardware watchdog so heater MOSFET control fails safe on any stall.
 * **Clean Toolchain & Libraries:** Removed unused `Button2`, eliminated manual `U8g2` font file patches, and pinned `espressif32@~6.3.2` for reproducible PlatformIO builds.
 
 ## Hardware & Controls
@@ -64,10 +70,10 @@ The original Songguo PTS200 repository (`Eddddddddy/Songguo-PTS200`) stopped upd
 
 Download the release binaries from the Releases page and follow [docs/update_guide.md](docs/update_guide.md):
 
-* **`PTS200_v5.0.0_update.bin`**: Use for regular upgrades via `Setup` → `Update FW` (USB MSC drag and drop).
-* **`PTS200_v5.0.0_factory.bin`**: Full merged flash image starting at `0x0000` for recovery or fresh flashes.
+* **`PTS200_v5.1.0_update.bin`**: Use for regular upgrades via `Setup` → `Update FW` (USB MSC drag and drop).
+* **`PTS200_v5.1.0_factory.bin`**: Full merged flash image starting at `0x0000` for recovery or fresh flashes.
 
-Upgrading to `v5.0.0` updates `VERSION_NUM` to `500`, resetting stored EEPROM parameters to safe defaults on first boot.
+Upgrading from stock `v4.x` updates `VERSION_NUM` to `500` and resets stored EEPROM parameters to safe defaults on first boot; upgrading within `v5.x` keeps existing settings and tip calibrations intact.
 
 ## Building From Source
 
@@ -97,6 +103,7 @@ pio run -t upload
    * `SparkFun LIS2DH12 Arduino Library` (`^1.0.3`)
 3. Board settings:
    * **Board:** `ESP32S2 Dev Module`
+   * **CPU Frequency:** `80MHz` (recommended for cooler handle operation; `160MHz` or `240MHz` also supported)
    * **USB CDC On Boot:** `Enabled`
    * **Upload Mode:** `Internal USB`
 4. Open and upload `SolderingPen_ESP32S2/SolderingPen_ESP32S2.ino`.
