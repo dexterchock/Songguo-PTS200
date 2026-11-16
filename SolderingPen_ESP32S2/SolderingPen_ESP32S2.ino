@@ -146,6 +146,31 @@ void wakeDisplay() {
   forceScreenRedraw = true;
 }
 
+void drawHoldPrompt(uint32_t heldMs) {
+  uint32_t elapsed = (heldMs > 500) ? (heldMs - 500) : 0;
+  uint8_t fillWidth = constrain((int)((elapsed * 104UL) / 2000UL), 0, 104);
+
+  u8g2.firstPage();
+  do {
+    u8g2.setFont(PTS200_16);
+    u8g2.setFontPosTop();
+    const char *title = "Release: Setup";
+    uint16_t tw = u8g2.getUTF8Width(title);
+    u8g2.drawUTF8((128 - tw) / 2, 4 + SCREEN_OFFSET, title);
+
+    u8g2.setFont(u8g2_font_ncenB08_tr);
+    const char *sub = "Hold: 90 Level";
+    uint16_t sw = u8g2.getUTF8Width(sub);
+    u8g2.drawStr((128 - sw) / 2, 26 + SCREEN_OFFSET, sub);
+
+    u8g2.drawFrame(10, 42 + SCREEN_OFFSET, 108, 12);
+    if (fillWidth > 0) {
+      u8g2.drawBox(12, 44 + SCREEN_OFFSET, fillWidth, 8);
+    }
+  } while (u8g2.nextPage());
+  forceScreenRedraw = true;
+}
+
 void updateSensorScheduled() {
   uint32_t now = millis();
   if ((uint32_t)(now - lastSensorMs) >= 50) {
@@ -326,13 +351,16 @@ void ROTARYCheck() {
         return;
       }
 
-      // Check button hold duration while keeping temperature control & sensing alive
+      // Check button hold duration with staged cue at 500ms and Level Mode at 2500ms
+      bool settingsCued = false;
+      uint32_t lastHoldDrawMs = 0;
       while (!digitalRead(BUTTON_PIN)) {
         feedWatchdog();
         updateSensorScheduled();
         Thermostat();
-        delay(5);
-        if ((millis() - buttonmillis) >= 2500) {
+
+        uint32_t heldMs = millis() - buttonmillis;
+        if (heldMs >= 2500) {
           // Activate Level Mode and return to loop() so SENSORCheck/Thermostat keep updating live
           inLevelMode = true;
           lastLevelMs = 0;
@@ -342,13 +370,27 @@ void ROTARYCheck() {
           c0 = digitalRead(BUTTON_PIN);
           return;
         }
+
+        if (heldMs >= 500) {
+          if (!settingsCued) {
+            settingsCued = true;
+            wakeDisplay();
+            beep();
+            drawHoldPrompt(heldMs);
+            lastHoldDrawMs = millis();
+          } else if ((uint32_t)(millis() - lastHoldDrawMs) >= 40) {
+            lastHoldDrawMs = millis();
+            drawHoldPrompt(heldMs);
+          }
+        }
+        delay(5);
       }
 
       uint32_t pressDuration = millis() - buttonmillis;
 
-      if (pressDuration >= 500) {
+      if (settingsCued || pressDuration >= 500) {
         // HELD FOR 0.5s - 2.5s: Open Settings Menu on release
-        beep();
+        if (!settingsCued) beep();
         SetupScreen();
       } else {
         // SHORT PRESS (< 0.5s): Handle Unlock / Boost / Off
@@ -841,7 +883,6 @@ void MainScreen() {
 void SetupScreen() {
   ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
   wakeDisplay();
-  beep();
   uint16_t SaveSetTemp = SetTemp;
   uint8_t selection = 0;
   bool repeat = true;

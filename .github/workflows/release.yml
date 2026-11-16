@@ -49,15 +49,13 @@ jobs:
           VERSION_TAG: ${{ github.ref_name }}
         run: |
           sed "s/__TAG__/${VERSION_TAG}/g" <<'EOF' > dist/release_notes.md
-          Release __TAG__ optimizes display I2C throughput, CPU thermal efficiency, and hardware fault protection while keeping the proven bang bang thermal profile intact.
+          Release __TAG__ adds immediate staged feedback when holding the center button so you do not accidentally overshoot Settings into the 90° Spirit Level HUD.
 
           ### What Changed in __TAG__
-          * **OLED Dirty Frame Skipping & 30 Hz Level Cap:** Skips redundant `128x64` I2C flushes when telemetry is unchanged, stops polling OLED during screen off, removes duplicate `initDisplay()`, and sets explicit `u8g2.setBusClock(400000)`
-          * **IMU & I2C Bus Optimization:** Rate limits LIS2DH12 temperature reads to 250 ms with missing sensor guarding (`accelPresent`) and `Wire.setTimeOut(50)` recovery
-          * **5 ms Settle Overlap & Steady 20 Hz Sensor Cadence:** Overlaps IMU polling and `Vin` sampling inside the 5 ms OpAmp discharge window and paces sensing on a fixed 50 ms timer (also active during 2.5s hold checks)
-          * **80 MHz CPU Clock:** Lowers ESP32 S2 CPU from 240 MHz to 80 MHz while keeping native USB and 80 MHz APB peripherals at full speed to reduce internal handle heat
-          * **OLED Sleep Dimming & Manual Off Timeout:** Dims OLED contrast during sleep and turns off the screen after `time2off` even on double click Off mode
-          * **5s Task Watchdog:** Enables `esp_task_wdt` on the main loop so any stall resets cleanly with heater MOSFET off
+          * **Staged 500 ms Setup Cue:** Holding the center button plays 1 crisp `beep()` and shows `Release: Setup` on the OLED as soon as `500 ms` is crossed, removing the silent dead zone before `2500 ms`
+          * **Live Hold Progress Bar:** Displays a `Hold: 90 Level` progress bar from `500 ms` to `2500 ms` while temperature sensing and heater control stay active (`2500 ms` double beeps into Level Mode)
+          * **Clean Audio Distinction:** Removed duplicate Setup entry beep so Setup uses 1 beep at `500 ms` and Spirit Level uses 2 beeps at `2500 ms`
+          * **Preserved Settings:** Keeps `VERSION_NUM = 500` so upgrading from `v5.0.0` / `v5.1.0` preserves saved tip calibrations and preferences
 
           ### Binary Files
           * `PTS200___TAG___update.bin`: Drag and drop onto `ESP32-FWMSC` via `Setup` → `Update FW` for normal upgrades

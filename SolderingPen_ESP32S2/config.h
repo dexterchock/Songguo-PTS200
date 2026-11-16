@@ -2,7 +2,7 @@
 #define CONFIG_H
 
 // Firmware version
-#define VERSION "v5.1.0"
+#define VERSION "v5.2.0"
 #define VERSION_NUM 500
 
 // Accelerometer / IMU Type (PTS200 uses LIS2DH12)
