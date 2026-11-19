@@ -20,6 +20,26 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Verify version matches tag
+        env:
+          VERSION_TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PYEOF'
+          import os, re, sys
+          tag = os.environ["VERSION_TAG"]
+          with open("SolderingPen_ESP32S2/config.h", "r", encoding="utf-8") as f:
+              text = f.read()
+          match = re.search(r'^\s*#define\s+VERSION\s+"([^"]+)"', text, re.MULTILINE)
+          if not match:
+              print("ERROR: #define VERSION not found in SolderingPen_ESP32S2/config.h", file=sys.stderr)
+              sys.exit(1)
+          cfg_ver = match.group(1)
+          if cfg_ver != tag:
+              print(f"ERROR: config.h VERSION={cfg_ver!r} does not match tag {tag!r}", file=sys.stderr)
+              sys.exit(1)
+          print(f"Verified SolderingPen_ESP32S2/config.h VERSION == {cfg_ver}")
+          PYEOF
+
       - name: Install PlatformIO
         run: |
           python -m pip install --upgrade pip
@@ -48,19 +68,36 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION_TAG: ${{ github.ref_name }}
         run: |
-          sed "s/__TAG__/${VERSION_TAG}/g" <<'EOF' > dist/release_notes.md
-          Release __TAG__ adds immediate staged feedback when holding the center button so you do not accidentally overshoot Settings into the 90° Spirit Level HUD.
-
-          ### What Changed in __TAG__
-          * **Staged 500 ms Setup Cue:** Holding the center button plays 1 crisp `beep()` and shows `Release: Setup` on the OLED as soon as `500 ms` is crossed, removing the silent dead zone before `2500 ms`
-          * **Live Hold Progress Bar:** Displays a `Hold: 90 Level` progress bar from `500 ms` to `2500 ms` while temperature sensing and heater control stay active (`2500 ms` double beeps into Level Mode)
-          * **Clean Audio Distinction:** Removed duplicate Setup entry beep so Setup uses 1 beep at `500 ms` and Spirit Level uses 2 beeps at `2500 ms`
-          * **Preserved Settings:** Keeps `VERSION_NUM = 500` so upgrading from `v5.0.0` / `v5.1.0` preserves saved tip calibrations and preferences
-
-          ### Binary Files
-          * `PTS200___TAG___update.bin`: Drag and drop onto `ESP32-FWMSC` via `Setup` → `Update FW` for normal upgrades
-          * `PTS200___TAG___factory.bin`: Full merged flash image starting at `0x0000` for fresh flashes or recovery
-          EOF
+          python - <<'PYEOF'
+          import os, re
+          tag = os.environ["VERSION_TAG"]
+          body_lines = []
+          in_section = False
+          if os.path.exists("CHANGELOG.md"):
+              with open("CHANGELOG.md", "r", encoding="utf-8") as f:
+                  for raw in f.read().splitlines():
+                      stripped = raw.strip()
+                      if re.match(r"^##\s+", stripped):
+                          heading = stripped[2:].strip()
+                          if in_section:
+                              break
+                          if heading == tag:
+                              in_section = True
+                              continue
+                      elif in_section:
+                          body_lines.append(raw)
+          body = "\n".join(body_lines).strip()
+          if not body:
+              body = f"Release {tag} for Songguo PTS200 (`ESP32-S2`, `VERSION_NUM = 500`)."
+          notes = (
+              f"{body}\n\n"
+              "### Binary Files\n"
+              f"* `PTS200_{tag}_update.bin`: Drag and drop onto `ESP32-FWMSC` via `Setup` → `Update FW` for normal upgrades\n"
+              f"* `PTS200_{tag}_factory.bin`: Full merged flash image starting at `0x0000` for fresh flashes or recovery\n"
+          )
+          with open("dist/release_notes.md", "w", encoding="utf-8") as out:
+              out.write(notes)
+          PYEOF
           gh release create "$VERSION_TAG" \
             "dist/PTS200_${VERSION_TAG}_update.bin" \
             "dist/PTS200_${VERSION_TAG}_factory.bin" \

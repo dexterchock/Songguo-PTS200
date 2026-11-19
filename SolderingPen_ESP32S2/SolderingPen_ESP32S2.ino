@@ -72,12 +72,15 @@ double Input, Output, Setpoint, RawTemp, CurrentTemp, ChipTemp;
 // Voltage variables
 uint16_t Vin;
 
+#define ARRAY_COUNT(x) (sizeof(x) / sizeof((x)[0]))
+
 // State variables
 bool inLockMode = true;
 bool inSleepMode = false;
 bool inOffMode = false;
 bool inBoostMode = false;
 bool inLevelMode = false; // 90° vertical spirit level mode
+bool inCalibration = false;
 bool isWorky = true;
 bool beepIfWorky = true;
 bool TipIsPresent = true;
@@ -85,9 +88,28 @@ bool oledPowerSaved = false;
 bool forceScreenRedraw = true;
 bool wdtEnabled = false;
 
+// Level HUD filter & lock hysteresis
+float levelRollFilt = 0.0f;
+float levelPitchFilt = 0.0f;
+bool levelFiltInit = false;
+bool levelLocked = false;
+
+// USB MSC status state (written in event callback, rendered on loopTask)
+enum MscDisplayState : uint8_t {
+  MSC_UI_READY = 0,
+  MSC_UI_START,
+  MSC_UI_WRITING,
+  MSC_UI_END,
+  MSC_UI_ERROR,
+  MSC_UI_POWER
+};
+volatile uint8_t mscDisplayState = MSC_UI_READY;
+bool mscEventRegistered = false;
+
 // Timing variables
 uint32_t sleepmillis;
 uint32_t offMillis;
+uint32_t lockMillis = 0;
 uint32_t boostmillis;
 uint32_t buttonmillis;
 uint32_t goneSeconds;
@@ -130,6 +152,7 @@ float fmap(float x, float in_min, float in_max, float out_min, float out_max) {
 void LevelScreen();
 void SENSORCheck();
 void Thermostat();
+void resetButtonRepeat();
 
 void feedWatchdog() {
   if (wdtEnabled) {
@@ -142,6 +165,9 @@ void wakeDisplay() {
     u8g2.setPowerSave(0);
     oledPowerSaved = false;
   }
+  uint32_t now = millis();
+  offMillis = now;
+  lockMillis = now;
   u8g2.setContrast(255);
   forceScreenRedraw = true;
 }
@@ -184,11 +210,13 @@ void setup() {
   pinMode(CONTROL_PIN, OUTPUT);
   digitalWrite(CONTROL_PIN, HEATER_OFF);
 
-  // 2. Hardware button pins
+  // 2. Hardware button pins & non-blocking Serial CDC
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(BUTTON_P_PIN, INPUT_PULLUP);
   pinMode(BUTTON_N_PIN, INPUT_PULLUP);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
+  Serial.begin(115200);
+  Serial.setTxTimeoutMs(0);
 
   // 3. Load EEPROM configuration
   if (!init_EEPROM()) {
@@ -229,9 +257,7 @@ void setup() {
     u8g2.drawUTF8((128 - str_width) / 2, 32 + SCREEN_OFFSET, "DEXTER");
   } while (u8g2.nextPage());
 
-  // 6. Serial & ADC Setup
-  Serial.begin(115200);
-  Serial.setTxTimeoutMs(0);
+  // 6. ADC Setup
   adc_sensor.attach(SENSOR_PIN);
   adc_vin.attach(VIN_PIN);
 
@@ -285,6 +311,7 @@ void setup() {
 
   a0 = 0;
   b0 = 0;
+  resetButtonRepeat();
   setRotary(TEMP_MIN, TEMP_MAX, TEMP_STEP, DefaultTemp);
 
   ChipTemp = getChipTemp();
@@ -296,6 +323,8 @@ void setup() {
   MainScreen();
 
   sleepmillis = millis();
+  offMillis = sleepmillis;
+  lockMillis = sleepmillis;
   lastSensorMs = sleepmillis;
   beep();
   beep();
@@ -329,7 +358,27 @@ void loop() {
 }
 
 void ROTARYCheck() {
-  SetTemp = getRotary();
+  if (oledPowerSaved) {
+    if (!digitalRead(BUTTON_P_PIN) || !digitalRead(BUTTON_N_PIN)) {
+      wakeDisplay();
+      a0 = digitalRead(BUTTON_N_PIN);
+      b0 = digitalRead(BUTTON_P_PIN);
+      resetButtonRepeat();
+    }
+  } else {
+    uint16_t newSetTemp = getRotary();
+    if (newSetTemp != SetTemp) {
+      SetTemp = newSetTemp;
+      if (inLockMode) {
+        lockMillis = millis();
+      } else if (inOffMode) {
+        offMillis = millis();
+      } else {
+        handleMoved = true;
+        sleepmillis = millis();
+      }
+    }
+  }
 
   uint8_t c = digitalRead(BUTTON_PIN);
   if (!c && c0) {
@@ -337,16 +386,12 @@ void ROTARYCheck() {
     if (digitalRead(BUTTON_PIN) == c) {
       buttonmillis = millis();
 
-      // If already in Level Mode, clicking center button exits back to main screen
+      // If already in Level Mode, clicking center button exits immediately without blocking heater regulation
       if (inLevelMode) {
         inLevelMode = false;
         handleMoved = true;
-        forceScreenRedraw = true;
+        wakeDisplay();
         beep();
-        while (!digitalRead(BUTTON_PIN)) {
-          feedWatchdog();
-          delay(10);
-        }
         c0 = digitalRead(BUTTON_PIN);
         return;
       }
@@ -364,6 +409,14 @@ void ROTARYCheck() {
           // Activate Level Mode and return to loop() so SENSORCheck/Thermostat keep updating live
           inLevelMode = true;
           lastLevelMs = 0;
+          levelFiltInit = false;
+          levelLocked = false;
+          if (inSleepMode) {
+            inSleepMode = false;
+            beepIfWorky = true;
+          }
+          sleepmillis = millis();
+          handleMoved = false;
           wakeDisplay();
           beep();
           beep();
@@ -393,24 +446,41 @@ void ROTARYCheck() {
         if (!settingsCued) beep();
         SetupScreen();
       } else {
-        // SHORT PRESS (< 0.5s): Handle Unlock / Boost / Off
+        // SHORT PRESS (< 0.5s): Handle Unlock / Wake / Boost / Off
         beep();
         if (inLockMode) {
           inLockMode = false;
+          inSleepMode = false;
+          inBoostMode = false;
+          wakeDisplay();
           handleMoved = true;
-          forceScreenRedraw = true;
+          sleepmillis = millis();
+          beepIfWorky = true;
         } else {
           buttonmillis = millis();
           while ((digitalRead(BUTTON_PIN)) && ((millis() - buttonmillis) < 200)) {
             feedWatchdog();
-            delay(10);
+            updateSensorScheduled();
+            Thermostat();
+            delay(5);
           }
           
           if ((millis() - buttonmillis) >= 200) {  // Single click
             if (inOffMode) {
               inOffMode = false;
+              inSleepMode = false;
+              inBoostMode = false;
+              wakeDisplay();
               handleMoved = true;
-              forceScreenRedraw = true;
+              sleepmillis = millis();
+              beepIfWorky = true;
+            } else if (inSleepMode) {
+              inSleepMode = false;
+              inBoostMode = false;
+              wakeDisplay();
+              handleMoved = true;
+              sleepmillis = millis();
+              beepIfWorky = true;
             } else {
               inBoostMode = !inBoostMode;
               if (inBoostMode) boostmillis = millis();
@@ -419,8 +489,10 @@ void ROTARYCheck() {
             }
           } else {  // Double click
             inOffMode = true;
+            inSleepMode = false;
+            inBoostMode = false;
+            wakeDisplay();
             offMillis = millis();
-            forceScreenRedraw = true;
           }
         }
       }
@@ -440,7 +512,46 @@ void ROTARYCheck() {
 }
 
 void SLEEPCheck() {
-  if (inLockMode || inLevelMode) return; // Never sleep while aligning heat inserts
+  if (inLevelMode) {
+    if (handleMoved) {
+      handleMoved = false;
+      uint32_t now = millis();
+      sleepmillis = now;
+      offMillis = now;
+      lockMillis = now;
+    }
+    if (!inOffMode && !inLockMode && (time2off > 0) &&
+        (((millis() - sleepmillis) / 60000UL) >= time2off)) {
+      inLevelMode = false;
+      inOffMode = true;
+      inSleepMode = false;
+      inBoostMode = false;
+      offMillis = millis();
+      oledPowerSaved = true;
+      u8g2.setPowerSave(1);
+      beep();
+    } else if (inLockMode && !oledPowerSaved && (time2off > 0) &&
+               (((millis() - lockMillis) / 60000UL) >= time2off)) {
+      inLevelMode = false;
+      oledPowerSaved = true;
+      u8g2.setPowerSave(1);
+    } else if (inOffMode && !oledPowerSaved && (time2off > 0) &&
+               (((millis() - offMillis) / 60000UL) >= time2off)) {
+      inLevelMode = false;
+      oledPowerSaved = true;
+      u8g2.setPowerSave(1);
+    }
+    return;
+  }
+
+  if (inLockMode) {
+    handleMoved = false;
+    if (!oledPowerSaved && (time2off > 0) && (((millis() - lockMillis) / 60000UL) >= time2off)) {
+      u8g2.setPowerSave(1);
+      oledPowerSaved = true;
+    }
+    return;
+  }
 
   if (inOffMode) {
     handleMoved = false; // Keep OLED off until explicit button wake
@@ -467,11 +578,14 @@ void SLEEPCheck() {
   goneSeconds = (millis() - sleepmillis) / 1000;
   if ((!inSleepMode) && (time2sleep > 0) && (goneSeconds >= time2sleep)) {
     inSleepMode = true;
+    inBoostMode = false;
     u8g2.setContrast(40);
     forceScreenRedraw = true;
     beep();
   } else if ((!inOffMode) && (time2off > 0) && ((goneSeconds / 60) >= time2off)) {
     inOffMode = true;
+    inSleepMode = false;
+    inBoostMode = false;
     offMillis = millis();
     oledPowerSaved = true;
     u8g2.setPowerSave(1);
@@ -489,8 +603,11 @@ void SENSORCheck() {
     int16_t rawY = accel.getRawY();
     int16_t rawZ = accel.getRawZ();
 
-    // Drain sensor above, but skip buffering during post-beep mechanical ringing
-    if ((int32_t)(millis() - accelIgnoreUntil) >= 0) {
+    // Drain sensor above, but skip buffering when disabled or during post-beep mechanical ringing
+    if (WAKEUPthreshold == 0) {
+      accelIndex = 0;
+      accelBufferReady = false;
+    } else if ((int32_t)(millis() - accelIgnoreUntil) >= 0) {
       accels[accelIndex][0] = rawX + 32768;
       accels[accelIndex][1] = rawY + 32768;
       accels[accelIndex][2] = rawZ + 32768;
@@ -547,13 +664,30 @@ void SENSORCheck() {
   // Adaptive threshold: 280°C on 5V weak USB, 470°C on fast chargers
   double openCircuitThreshold = (Vin < 7000) ? 280.0 : 470.0;
 
-  if (temp > openCircuitThreshold) {
+  if (temp >= openCircuitThreshold) {
     // TIP IS UNPLUGGED: Instant bypass of smoothing filter
     TipIsPresent = false;
     RawTemp = temp;
     CurrentTemp = 999.0;
     ShowTemp = 999;
     ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
+  } else if (!TipIsPresent) {
+    // TIP RE-INSERTED: Reset filter before smoothing and optionally prompt tip selection
+    ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
+    TipIsPresent = true;
+    RawTemp = temp;
+    calculateTemp();
+    ShowTemp = CurrentTemp;
+    if (!inCalibration) {
+      beep();
+      wakeDisplay();
+      ChangeTipScreen();
+      if (!update_EEPROM()) Serial.println("EEPROM update failed on tip change");
+      handleMoved = true;
+      forceScreenRedraw = true;
+      c0 = LOW;
+      setRotary(TEMP_MIN, TEMP_MAX, TEMP_STEP, SetTemp);
+    }
   } else {
     // TIP IS PLUGGED IN: Smooth filter keeps display calm
     RawTemp += (temp - RawTemp) * SMOOTHIE;
@@ -564,7 +698,7 @@ void SENSORCheck() {
     if (abs(ShowTemp - Setpoint) <= 1) ShowTemp = Setpoint;
   }
 
-  double targetTemp = (inOffMode || inLockMode)
+  double targetTemp = (!TipIsPresent || inOffMode || inLockMode)
                           ? SetTemp
                           : (inSleepMode ? SleepTemp
                                          : (inBoostMode ? constrain(SetTemp + BoostTemp, 0, TEMP_MAX) : SetTemp));
@@ -575,23 +709,6 @@ void SENSORCheck() {
     beepIfWorky = false;
   } else {
     isWorky = false;
-  }
-
-  // Tip re-insertion detection
-  if (!TipIsPresent && (temp < openCircuitThreshold)) {
-    ledcWrite(CONTROL_CHANNEL, HEATER_OFF);
-    beep();
-    TipIsPresent = true;
-    RawTemp = temp;
-    calculateTemp();
-    ShowTemp = CurrentTemp;
-    wakeDisplay();
-    ChangeTipScreen();
-    if (!update_EEPROM()) Serial.println("EEPROM update failed on tip change");
-    handleMoved = true;
-    forceScreenRedraw = true;
-    c0 = LOW;
-    setRotary(TEMP_MIN, TEMP_MAX, TEMP_STEP, SetTemp);
   }
 }
 
@@ -639,7 +756,11 @@ void Thermostat() {
   }
   
   limit = getPowerLimit();
-  ledcWrite(CONTROL_CHANNEL, constrain((HEATER_PWM), 0, limit));
+#if defined(P_MOSFET)
+  ledcWrite(CONTROL_CHANNEL, constrain((int)(HEATER_PWM), 0, (int)limit));
+#elif defined(N_MOSFET)
+  ledcWrite(CONTROL_CHANNEL, constrain((int)(HEATER_PWM), 255 - (int)limit, 255));
+#endif
 }
 
 // ----------------------------------------------------------------------------
@@ -652,30 +773,51 @@ void LevelScreen() {
 
   // Determine shaft orientation dynamically:
   // Whichever axis has > 8000 counts is pointing down with gravity
-  int16_t tiltRoll = 0;
-  int16_t tiltPitch = 0;
+  int16_t rawRoll = 0;
+  int16_t rawPitch = 0;
   int16_t shaftVal = 0;
 
   if (abs(rawX) > abs(rawY)) {
     shaftVal = rawX;
-    tiltRoll = rawY;
-    tiltPitch = rawZ;
+    rawRoll = rawY;
+    rawPitch = rawZ;
   } else {
     shaftVal = rawY;
-    tiltRoll = rawX;
-    tiltPitch = rawZ;
+    rawRoll = rawX;
+    rawPitch = rawZ;
   }
 
   if (hand_side) {
-    tiltRoll = -tiltRoll;
-    tiltPitch = -tiltPitch;
+    rawRoll = -rawRoll;
+    rawPitch = -rawPitch;
   }
+
+  if (!levelFiltInit) {
+    levelRollFilt = (float)rawRoll;
+    levelPitchFilt = (float)rawPitch;
+    levelFiltInit = true;
+  } else {
+    levelRollFilt += 0.35f * ((float)rawRoll - levelRollFilt);
+    levelPitchFilt += 0.35f * ((float)rawPitch - levelPitchFilt);
+  }
+
+  int16_t tiltRoll = (int16_t)roundf(levelRollFilt);
+  int16_t tiltPitch = (int16_t)roundf(levelPitchFilt);
 
   // Y-Axis Rotation: Left/Right Roll tilts the center line angle
   int8_t rollAngle = constrain(tiltRoll / 180, -9, 9);
 
-  // Perpendicular threshold: shaft pointing down (>9000 counts), both tilts near 0 (<450 = ~1.5°)
-  bool isVertical = (abs(shaftVal) > 9000) && (abs(tiltRoll) < 450) && (abs(tiltPitch) < 450);
+  // Perpendicular hysteresis: lock < 420, unlock > 520 (eliminates 30 Hz boundary jitter)
+  if (levelLocked) {
+    if ((abs(shaftVal) < 8200) || (abs(tiltRoll) > 520) || (abs(tiltPitch) > 520)) {
+      levelLocked = false;
+    }
+  } else {
+    if ((abs(shaftVal) > 9000) && (abs(tiltRoll) < 420) && (abs(tiltPitch) < 420)) {
+      levelLocked = true;
+    }
+  }
+  bool isVertical = levelLocked;
 
   u8g2.firstPage();
   do {
@@ -684,9 +826,9 @@ void LevelScreen() {
     u8g2.setFontPosTop();
     u8g2.drawUTF8(0, 0 + SCREEN_OFFSET, txt_set_temp[language]);
     u8g2.setCursor(40, 0 + SCREEN_OFFSET);
-    u8g2.setFont(u8g2_font_unifont_t_chinese3);
+    u8g2.setFont(u8g2_font_unifont_tr);
 
-    uint16_t dispSet = (inOffMode || inLockMode) ? SetTemp : (inSleepMode ? SleepTemp : (uint16_t)Setpoint);
+    uint16_t dispSet = (!TipIsPresent || inOffMode || inLockMode) ? SetTemp : (inSleepMode ? SleepTemp : (uint16_t)Setpoint);
     u8g2.print(dispSet);
 
     u8g2.setFont(PTS200_16);
@@ -753,7 +895,7 @@ void LevelScreen() {
     }
 
     // 3. BOTTOM ROW: Live Current Tip Temperature on the RIGHT (clean & unblocked)
-    u8g2.setFont(u8g2_font_unifont_t_chinese3);
+    u8g2.setFont(u8g2_font_unifont_tr);
     u8g2.setFontPosTop();
     char tempBuf[12];
     if (!TipIsPresent || ShowTemp > 500) snprintf(tempBuf, sizeof(tempBuf), "---C");
@@ -802,7 +944,7 @@ void MainScreen() {
     lastSENSORTmp += 0.1f * ((float)getChipTemp() - lastSENSORTmp);
   }
 
-  uint16_t dispSet = (inOffMode || inLockMode) ? SetTemp : (inSleepMode ? SleepTemp : (uint16_t)Setpoint);
+  uint16_t dispSet = (!TipIsPresent || inOffMode || inLockMode) ? SetTemp : (inSleepMode ? SleepTemp : (uint16_t)Setpoint);
   uint16_t dispTemp = (!TipIsPresent || ShowTemp > 500) ? 999 : ShowTemp;
 
   const char *status_str = txt_hold[language];
@@ -844,13 +986,17 @@ void MainScreen() {
   cachedChipTenths = chipTenths;
   cachedVinTenths = vinTenths;
 
+  char tempBuf[8];
+  if (dispTemp == 999) snprintf(tempBuf, sizeof(tempBuf), "---");
+  else snprintf(tempBuf, sizeof(tempBuf), "%03d", dispTemp);
+
   u8g2.firstPage();
   do {
     u8g2.setFont(PTS200_16);
     u8g2.setFontPosTop();
     u8g2.drawUTF8(0, 0 + SCREEN_OFFSET, txt_set_temp[language]);
     u8g2.setCursor(40, 0 + SCREEN_OFFSET);
-    u8g2.setFont(u8g2_font_unifont_t_chinese3);
+    u8g2.setFont(u8g2_font_unifont_tr);
     u8g2.print(dispSet);
 
     u8g2.setFont(PTS200_16);
@@ -858,7 +1004,7 @@ void MainScreen() {
     u8g2.setCursor(128 - str_width, 0 + SCREEN_OFFSET);
     u8g2.print(status_str);
 
-    u8g2.setFont(u8g2_font_unifont_t_chinese3);
+    u8g2.setFont(u8g2_font_unifont_tr);
     if (MainScrType) {
       u8g2.setCursor(0, 50);
       u8g2.print(lastSENSORTmp, 1);
@@ -869,13 +1015,15 @@ void MainScreen() {
 
       u8g2.setFont(u8g2_font_freedoomr25_tn);
       u8g2.setFontPosTop();
-      u8g2.setCursor(37, 18);
-      if (dispTemp == 999) u8g2.print(F("---")); else u8g2.printf("%03d", dispTemp);
+      int16_t tx = (128 - (int16_t)u8g2.getStrWidth(tempBuf)) / 2;
+      u8g2.setCursor(tx, 18);
+      u8g2.print(tempBuf);
     } else {
       u8g2.setFont(u8g2_font_fub42_tn);
       u8g2.setFontPosTop();
-      u8g2.setCursor(15, 20);
-      if (dispTemp == 999) u8g2.print(F("---")); else u8g2.printf("%03d", dispTemp);
+      int16_t tx = (128 - (int16_t)u8g2.getStrWidth(tempBuf)) / 2;
+      u8g2.setCursor(tx, 20);
+      u8g2.print(tempBuf);
     }
   } while (u8g2.nextPage());
 }
@@ -889,16 +1037,16 @@ void SetupScreen() {
   bool eepromOperationFailed = false;
 
   while (repeat) {
-    selection = MenuScreen(SetupItems, sizeof(SetupItems), selection);
+    selection = MenuScreen(SetupItems, ARRAY_COUNT(SetupItems), selection);
     switch (selection) {
       case 0: TipScreen(); break;
       case 1: TempScreen(); break;
       case 2: TimerScreen(); break;
-      case 3: MainScrType = MenuScreen(MainScreenItems, sizeof(MainScreenItems), MainScrType); break;
+      case 3: MainScrType = MenuScreen(MainScreenItems, ARRAY_COUNT(MainScreenItems), MainScrType); break;
       case 4: InfoScreen(); break;
       case 5: {
         uint8_t oldVolt = VoltageValue;
-        VoltageValue = MenuScreen(VoltageItems, sizeof(VoltageItems), VoltageValue);
+        VoltageValue = MenuScreen(VoltageItems, ARRAY_COUNT(VoltageItems), VoltageValue);
         if (oldVolt != VoltageValue) {
           update_EEPROM();
           u8g2.clearBuffer();
@@ -906,14 +1054,29 @@ void SetupScreen() {
           u8g2.setFontPosTop();
           u8g2.drawUTF8(0, 24 + SCREEN_OFFSET, "Switching...");
           u8g2.sendBuffer();
+          feedWatchdog();
           delay(400);
           ESP.restart(); // Clean handshake reset from 5V
         }
       } break;
-      case 6: QCEnable = MenuScreen(QCItems, sizeof(QCItems), QCEnable); break;
-      case 7: beepEnable = MenuScreen(BuzzerItems, sizeof(BuzzerItems), beepEnable); break;
+      case 6: {
+        bool oldQC = QCEnable;
+        QCEnable = MenuScreen(QCItems, ARRAY_COUNT(QCItems), QCEnable);
+        if (oldQC != QCEnable) {
+          update_EEPROM();
+          u8g2.clearBuffer();
+          u8g2.setFont(PTS200_16);
+          u8g2.setFontPosTop();
+          u8g2.drawUTF8(0, 24 + SCREEN_OFFSET, "Switching...");
+          u8g2.sendBuffer();
+          feedWatchdog();
+          delay(400);
+          ESP.restart(); // Re-initialize USB QC state on boot
+        }
+      } break;
+      case 7: beepEnable = MenuScreen(BuzzerItems, ARRAY_COUNT(BuzzerItems), beepEnable); break;
       case 8: 
-        restore_default_config = MenuScreen(DefaultItems, sizeof(DefaultItems), restore_default_config);
+        restore_default_config = MenuScreen(DefaultItems, ARRAY_COUNT(DefaultItems), restore_default_config);
         if (restore_default_config) {
           restore_default_config = false;
           if (!write_default_EEPROM()) {
@@ -922,25 +1085,50 @@ void SetupScreen() {
             repeat = false;
             break;
           }
-          if (!read_EEPROM()) {
-            Serial.println("Failed to read restored default EEPROM");
-            eepromOperationFailed = true;
-            repeat = false;
-            break;
-          }
+          u8g2.clearBuffer();
+          u8g2.setFont(PTS200_16);
+          u8g2.setFontPosTop();
+          u8g2.drawUTF8(0, 24 + SCREEN_OFFSET, "Resetting...");
+          u8g2.sendBuffer();
+          feedWatchdog();
+          delay(400);
+          ESP.restart(); // Cleanly re-negotiate USB-PD, OLED orientation, and defaults
         }
         break;
       case 9: {
         bool lastbutton = (!digitalRead(BUTTON_PIN));
+        mscDisplayState = MSC_UI_READY;
+        uint8_t lastDrawnState = MSC_UI_READY;
         u8g2.clearBuffer();
         u8g2.setFont(u8g2_font_ncenB08_tr);
         u8g2.drawStr(0, 10, "MSC Update");
         u8g2.sendBuffer();
-        delay(1000);
-        MSC_Update.onEvent(usbEventCallback);
+        feedWatchdog();
+        delay(500);
+        if (!mscEventRegistered) {
+          MSC_Update.onEvent(usbEventCallback);
+          mscEventRegistered = true;
+        }
         MSC_Update.begin();
         do {
           feedWatchdog();
+          uint8_t curState = mscDisplayState;
+          if (curState != lastDrawnState) {
+            lastDrawnState = curState;
+            const char *msg = "MSC Update";
+            switch (curState) {
+              case MSC_UI_START:   msg = "MSC Start"; break;
+              case MSC_UI_WRITING: msg = "MSC Updating"; break;
+              case MSC_UI_END:     msg = "MSC End"; break;
+              case MSC_UI_ERROR:   msg = "MSC ERROR!"; break;
+              case MSC_UI_POWER:   msg = "MSC Power"; break;
+              default:             msg = "MSC Update"; break;
+            }
+            u8g2.clearBuffer();
+            u8g2.setFont(u8g2_font_ncenB08_tr);
+            u8g2.drawStr(0, 10, msg);
+            u8g2.sendBuffer();
+          }
           delay(10);
           if (lastbutton && digitalRead(BUTTON_PIN)) {
             delay(10);
@@ -965,7 +1153,7 @@ void SetupScreen() {
   }
 
   handleMoved = true;
-  forceScreenRedraw = true;
+  wakeDisplay();
   SetTemp = SaveSetTemp;
   setRotary(TEMP_MIN, TEMP_MAX, TEMP_STEP, SetTemp);
 }
@@ -974,7 +1162,7 @@ void TipScreen() {
   uint8_t selection = 0;
   bool repeat = true;
   while (repeat) {
-    selection = MenuScreen(TipItems, sizeof(TipItems), selection);
+    selection = MenuScreen(TipItems, ARRAY_COUNT(TipItems), selection);
     switch (selection) {
       case 0: ChangeTipScreen(); break;
       case 1: CalibrationScreen(); break;
@@ -991,7 +1179,7 @@ void TempScreen() {
   uint8_t selection = 0;
   bool repeat = true;
   while (repeat) {
-    selection = MenuScreen(TempItems, sizeof(TempItems), selection);
+    selection = MenuScreen(TempItems, ARRAY_COUNT(TempItems), selection);
     switch (selection) {
       case 0:
         setRotary(TEMP_MIN, TEMP_MAX, TEMP_STEP, DefaultTemp);
@@ -1015,7 +1203,7 @@ void TimerScreen() {
   uint8_t selection = 0;
   bool repeat = true;
   while (repeat) {
-    selection = MenuScreen(TimerItems, sizeof(TimerItems), selection);
+    selection = MenuScreen(TimerItems, ARRAY_COUNT(TimerItems), selection);
     switch (selection) {
       case 0:
         setRotary(0, 600, 10, time2sleep);
@@ -1045,7 +1233,6 @@ uint8_t MenuScreen(const char *Items[][language_types], uint8_t numberOfItems, u
   uint8_t lastselected = selected;
   int8_t arrow = 0;
   if (selected) arrow = 1;
-  numberOfItems = (numberOfItems / language_types) >> 2;
 
   setRotary(0, numberOfItems - 2, 1, selected);
 
@@ -1079,7 +1266,6 @@ uint8_t MenuScreen(const char *Items[][language_types], uint8_t numberOfItems, u
 }
 
 void MessageScreen(const char *Items[][language_types], uint8_t numberOfItems) {
-  numberOfItems = (numberOfItems / language_types) >> 2;
   bool lastbutton = (!digitalRead(BUTTON_PIN));
   u8g2.firstPage();
   do {
@@ -1207,6 +1393,7 @@ void CalibrationScreen() {
   uint32_t savedSleepMillis = sleepmillis;
   uint32_t savedBoostMillis = boostmillis;
 
+  inCalibration = true;
   inLockMode = false;
   inSleepMode = false;
   inOffMode = false;
@@ -1240,10 +1427,8 @@ void CalibrationScreen() {
         TipIsPresent = savedTipIsPresent;
         sleepmillis = savedSleepMillis;
         boostmillis = savedBoostMillis;
-        oledPowerSaved = inOffMode;
-        if (inOffMode) offMillis = millis();
-        forceScreenRedraw = true;
-        u8g2.setPowerSave(inOffMode ? 1 : 0);
+        inCalibration = false;
+        wakeDisplay();
         return;
       }
 
@@ -1287,7 +1472,7 @@ void CalibrationScreen() {
   CalTempNew[3] = getChipTemp();
   if ((CalTempNew[0] + 10 < CalTempNew[1]) &&
       (CalTempNew[1] + 10 < CalTempNew[2])) {
-    if (MenuScreen(StoreItems, sizeof(StoreItems), 0)) {
+    if (MenuScreen(StoreItems, ARRAY_COUNT(StoreItems), 0)) {
       for (uint8_t i = 0; i < 4; i++) CalTemp[CurrentTip][i] = CalTempNew[i];
     }
   }
@@ -1303,11 +1488,8 @@ void CalibrationScreen() {
   TipIsPresent = savedTipIsPresent;
   sleepmillis = savedSleepMillis;
   boostmillis = savedBoostMillis;
-
-  oledPowerSaved = inOffMode;
-  if (inOffMode) offMillis = millis();
-  forceScreenRedraw = true;
-  u8g2.setPowerSave(inOffMode ? 1 : 0);
+  inCalibration = false;
+  wakeDisplay();
 
   if (!update_EEPROM()) Serial.println("EEPROM update failed on calibration finish");
 }
@@ -1316,7 +1498,9 @@ void InputNameScreen() {
   uint8_t value;
   for (uint8_t digit = 0; digit < (TIPNAMELENGTH - 1); digit++) {
     bool lastbutton = (!digitalRead(BUTTON_PIN));
-    setRotary(31, 96, 1, 65);
+    uint8_t initChar = (uint8_t)TipName[CurrentTip][digit];
+    if (initChar < 32 || initChar > 95) initChar = 65; // 'A'
+    setRotary(31, 96, 1, initChar);
     do {
       feedWatchdog();
       value = getRotary();
@@ -1329,8 +1513,10 @@ void InputNameScreen() {
         u8g2.drawUTF8(0, 0 + SCREEN_OFFSET, txt_enter_tip_name[language]);
         u8g2.setCursor(12 * digit, 48 + SCREEN_OFFSET);
         u8g2.print(char(94));
-        u8g2.setCursor(0, 32 + SCREEN_OFFSET);
-        for (uint8_t i = 0; i < digit; i++) u8g2.print(TipName[CurrentTip][i]);
+        for (uint8_t i = 0; i < digit; i++) {
+          u8g2.setCursor(12 * i, 32 + SCREEN_OFFSET);
+          u8g2.print(TipName[CurrentTip][i]);
+        }
         u8g2.setCursor(12 * digit, 32 + SCREEN_OFFSET);
         u8g2.print(char(value));
       } while (u8g2.nextPage());
@@ -1348,8 +1534,8 @@ void InputNameScreen() {
 
 void DeleteTipScreen() {
   if (NumberOfTips == 1) {
-    MessageScreen(DeleteMessage, sizeof(DeleteMessage));
-  } else if (MenuScreen(SureItems, sizeof(SureItems), 0)) {
+    MessageScreen(DeleteMessage, ARRAY_COUNT(DeleteMessage));
+  } else if (MenuScreen(SureItems, ARRAY_COUNT(SureItems), 0)) {
     if (CurrentTip == (NumberOfTips - 1)) {
       CurrentTip--;
     } else {
@@ -1370,7 +1556,7 @@ void AddTipScreen() {
     CalTemp[CurrentTip][1] = TEMP280;
     CalTemp[CurrentTip][2] = TEMP360;
     CalTemp[CurrentTip][3] = TEMPCHP;
-  } else MessageScreen(MaxTipMessage, sizeof(MaxTipMessage));
+  } else MessageScreen(MaxTipMessage, ARRAY_COUNT(MaxTipMessage));
 }
 
 uint16_t denoiseAnalog() {
@@ -1408,9 +1594,22 @@ uint16_t getVIN() {
   return ((result / 4) * 31.3f);
 }
 
-unsigned int Button_Time1 = 0, Button_Time2 = 0;
+uint32_t btnNPressMs = 0, btnNLastStepMs = 0;
+uint32_t btnPPressMs = 0, btnPLastStepMs = 0;
+const uint32_t BUTTON_REPEAT_DELAY_MS = 400;
+const uint32_t BUTTON_REPEAT_RATE_MS = 80;
+
+void resetButtonRepeat() {
+  uint32_t now = millis();
+  btnNPressMs = now;
+  btnNLastStepMs = now;
+  btnPPressMs = now;
+  btnPLastStepMs = now;
+}
 
 void Button_loop() {
+  uint32_t now = millis();
+
   // Pin 2 (-) Decrement / Step down
   if (!digitalRead(BUTTON_N_PIN) && a0 == 1) {
     delay(BUTTON_DELAY);
@@ -1421,14 +1620,20 @@ void Button_loop() {
         if (count0 + countStep > countMax) count = countMin;
       }
       a0 = 0;
+      now = millis();
+      btnNPressMs = now;
+      btnNLastStepMs = now;
     }
   } else if (!digitalRead(BUTTON_N_PIN) && a0 == 0) {
-    delay(BUTTON_DELAY);
-    if (Button_Time1 > 10) count = constrain(count + countStep, countMin, countMax);
-    else Button_Time1++;
+    if (((uint32_t)(now - btnNPressMs) >= BUTTON_REPEAT_DELAY_MS) &&
+        ((uint32_t)(now - btnNLastStepMs) >= BUTTON_REPEAT_RATE_MS)) {
+      count = constrain(count + countStep, countMin, countMax);
+      btnNLastStepMs = now;
+    }
   } else if (digitalRead(BUTTON_N_PIN)) {
-    Button_Time1 = 0;
     a0 = 1;
+    btnNPressMs = now;
+    btnNLastStepMs = now;
   }
 
   // Pin 4 (+) Increment / Step up
@@ -1441,14 +1646,20 @@ void Button_loop() {
         if (count0 - countStep < countMin) count = countMax;
       }
       b0 = 0;
+      now = millis();
+      btnPPressMs = now;
+      btnPLastStepMs = now;
     }
   } else if (!digitalRead(BUTTON_P_PIN) && b0 == 0) {
-    delay(BUTTON_DELAY);
-    if (Button_Time2 > 10) count = constrain(count - countStep, countMin, countMax);
-    else Button_Time2++;
+    if (((uint32_t)(now - btnPPressMs) >= BUTTON_REPEAT_DELAY_MS) &&
+        ((uint32_t)(now - btnPLastStepMs) >= BUTTON_REPEAT_RATE_MS)) {
+      count = constrain(count - countStep, countMin, countMax);
+      btnPLastStepMs = now;
+    }
   } else if (digitalRead(BUTTON_P_PIN)) {
-    Button_Time2 = 0;
     b0 = 1;
+    btnPPressMs = now;
+    btnPLastStepMs = now;
   }
 }
 
@@ -1468,21 +1679,13 @@ void PD_Update() {
 }
 
 static void usbEventCallback(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
-  if (event_base == ARDUINO_USB_EVENTS) {
+  if (event_base == ARDUINO_FIRMWARE_MSC_EVENTS) {
     switch (event_id) {
-      case ARDUINO_USB_STARTED_EVENT: u8g2.clearBuffer(); u8g2.setFont(u8g2_font_ncenB08_tr); u8g2.drawStr(0, 10, "USB PLUGGED"); u8g2.sendBuffer(); break;
-      case ARDUINO_USB_STOPPED_EVENT: u8g2.clearBuffer(); u8g2.setFont(u8g2_font_ncenB08_tr); u8g2.drawStr(0, 10, "USB UNPLUGGED"); u8g2.sendBuffer(); break;
-      case ARDUINO_USB_SUSPEND_EVENT: u8g2.clearBuffer(); u8g2.setFont(u8g2_font_ncenB08_tr); u8g2.drawStr(0, 10, "USB SUSPENDED"); u8g2.sendBuffer(); break;
-      case ARDUINO_USB_RESUME_EVENT: u8g2.clearBuffer(); u8g2.setFont(u8g2_font_ncenB08_tr); u8g2.drawStr(0, 10, "USB RESUMED"); u8g2.sendBuffer(); break;
-      default: break;
-    }
-  } else if (event_base == ARDUINO_FIRMWARE_MSC_EVENTS) {
-    switch (event_id) {
-      case ARDUINO_FIRMWARE_MSC_START_EVENT: u8g2.clearBuffer(); u8g2.setFont(u8g2_font_ncenB08_tr); u8g2.drawStr(0, 10, "MSC Start"); u8g2.sendBuffer(); break;
-      case ARDUINO_FIRMWARE_MSC_WRITE_EVENT: u8g2.clearBuffer(); u8g2.setFont(u8g2_font_ncenB08_tr); u8g2.drawStr(0, 10, "MSC Updating"); u8g2.sendBuffer(); break;
-      case ARDUINO_FIRMWARE_MSC_END_EVENT: u8g2.clearBuffer(); u8g2.setFont(u8g2_font_ncenB08_tr); u8g2.drawStr(0, 10, "MSC End"); u8g2.sendBuffer(); break;
-      case ARDUINO_FIRMWARE_MSC_ERROR_EVENT: u8g2.clearBuffer(); u8g2.setFont(u8g2_font_ncenB08_tr); u8g2.drawStr(0, 10, "MSC ERROR!"); u8g2.sendBuffer(); break;
-      case ARDUINO_FIRMWARE_MSC_POWER_EVENT: u8g2.clearBuffer(); u8g2.setFont(u8g2_font_ncenB08_tr); u8g2.drawStr(0, 10, "MSC Power"); u8g2.sendBuffer(); break;
+      case ARDUINO_FIRMWARE_MSC_START_EVENT: mscDisplayState = MSC_UI_START; break;
+      case ARDUINO_FIRMWARE_MSC_WRITE_EVENT: mscDisplayState = MSC_UI_WRITING; break;
+      case ARDUINO_FIRMWARE_MSC_END_EVENT:   mscDisplayState = MSC_UI_END; break;
+      case ARDUINO_FIRMWARE_MSC_ERROR_EVENT: mscDisplayState = MSC_UI_ERROR; break;
+      case ARDUINO_FIRMWARE_MSC_POWER_EVENT: mscDisplayState = MSC_UI_POWER; break;
       default: break;
     }
   }

@@ -1,4 +1,4 @@
-# Songguo PTS200 Firmware (v5.2.0)
+# Songguo PTS200 Firmware (v5.3.0)
 
 The original Songguo PTS200 repository (`Eddddddddy/Songguo-PTS200`) stopped updating after `v4.5.3`, leaving flash wear, power stability, sleep/off, and sensor bugs unresolved. This standalone repository continues from `v4.5.3` with `v5.x`, resolving those hardware and firmware issues, optimizing CPU/screen responsiveness, and adding a live 90° vertical spirit level HUD for heat set inserts.
 
@@ -45,6 +45,7 @@ The original Songguo PTS200 repository (`Eddddddddy/Songguo-PTS200`) stopped upd
 * **Non Blocking Spirit Level Activation:** Removed the blocking wait loop after the 2.5s hold trigger so temperature measurement continues updating even while keeping the button pressed.
 * **Instant OLED Boot & 400 kHz I2C:** Starts the SH1107 OLED right after reading orientation from EEPROM and runs I2C at 400 kHz for low latency screen refreshes.
 * **Fixed Tight Loop Re Registration in `Update FW`:** Initializes `FirmwareMSC` events and mount once before waiting for exit input.
+* **Safety, State Machine & Display Refinements (`v5.3.0`):** Unblocks heating on Level HUD exit, enforces `time2off` in Level and Lock modes, resets cleanly on `Reset Config` and `QC3.0` changes, renders `Update FW` safely on `loopTask`, adds smoothed Level lock hysteresis, switches to ASCII `u8g2_font_unifont_tr` for smaller flash size, and converts button repeat to `millis()` timing (see [CHANGELOG.md](CHANGELOG.md)).
 * **Staged Hold Cue (`v5.2.0`):** Holding the center button sounds a single `beep()` and shows an immediate `Release: Setup` prompt with a live `Hold: 90 Level` progress bar at `500 ms` (`2500 ms` double beeps into Level HUD) so users do not overshoot Setup into Spirit Level mode.
 * **Screen, CPU & Watchdog Optimizations (`v5.1.0`):**
   * Skips redundant full frame OLED I2C transfers when screen telemetry is unchanged, caps Level HUD rendering at ~30 Hz, removes duplicate `initDisplay()`, and sets explicit `u8g2.setBusClock(400000)`.
@@ -71,8 +72,8 @@ The original Songguo PTS200 repository (`Eddddddddy/Songguo-PTS200`) stopped upd
 
 Download the release binaries from the Releases page and follow [docs/update_guide.md](docs/update_guide.md):
 
-* **`PTS200_v5.2.0_update.bin`**: Use for regular upgrades via `Setup` → `Update FW` (USB MSC drag and drop).
-* **`PTS200_v5.2.0_factory.bin`**: Full merged flash image starting at `0x0000` for recovery or fresh flashes.
+* **`PTS200_v5.3.0_update.bin`**: Use for regular upgrades via `Setup` → `Update FW` (USB MSC drag and drop).
+* **`PTS200_v5.3.0_factory.bin`**: Full merged flash image starting at `0x0000` for recovery or fresh flashes.
 
 Upgrading from stock `v4.x` updates `VERSION_NUM` to `500` and resets stored EEPROM parameters to safe defaults on first boot; upgrading within `v5.x` keeps existing settings and tip calibrations intact.
 
