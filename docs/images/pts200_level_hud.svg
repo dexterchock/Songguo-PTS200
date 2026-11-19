@@ -80,7 +80,7 @@
 
   <!-- Left column: PTS200 upright pointing tip-DOWN onto brass heat insert -->
   <text x="115" y="36" text-anchor="middle" fill="#8b949e" font-family="'Segoe UI', Arial, sans-serif" font-size="11.5" font-weight="600" letter-spacing="0.6">90° HEAT SET PRESS</text>
-  <g transform="translate(151, 52) scale(0.32) rotate(90)">
+  <g transform="translate(148.92, 52) scale(0.32) rotate(90)">
     
     <g>
       <!-- USB-C left end barrel -->
